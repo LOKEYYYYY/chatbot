@@ -216,6 +216,8 @@ def webhook():
 
     if detected_product:
         product = detected_product
+    elif not product and session_id in session_memory:
+        product = session_memory[session_id]["product"]   # 🔥 KEEP OLD PRODUCT
 
     if extracted_price:
         max_price = extracted_price

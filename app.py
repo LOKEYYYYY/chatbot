@@ -55,10 +55,10 @@ def webhook():
         product = detected_product
 
     # Filter by category
-    if product:
-        filtered = filtered[
-            filtered['Product Name'].str.contains(product, case=False, na=False)
-        ]
+    filtered = filtered[
+        (filtered['Category'].str.contains(product, case=False, na=False)) |
+        (filtered['Product Name'].str.contains(product, case=False, na=False))
+    ]
 
     # Price filter
     if price_range == "cheap":

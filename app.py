@@ -42,7 +42,30 @@ def webhook():
     #Get keyword before filtering
     query_text = req['queryResult']['queryText'].lower()
 
-    keywords = ["laptop", "phone", "camera", "headphones", "watch", "tablet"]
+    keywords = [
+        # Electronics (your original + expanded)
+        "electronics", "gadgets", "camera", "smartwatch", "monitor",
+        "smartphone", "speaker", "tablet", "laptop", "tech", "gaming",
+        "watches", "watch", "gaming console", "headphones", "phones",
+        "phone", "laptops", "air cond",
+
+        # Footwear
+        "sneakers", "running shoes", "heels", "hiking shoes", "boots",
+        "sandals", "flats", "formal shoes", "slippers",
+
+        # Books
+        "book", "novel", "cookbooks", "non-fiction", "fiction", "comics",
+        "textbooks", "magazines", "graphic novels", "biographies",
+
+        # Home appliances
+        "home appliances", "kitchen appliances", "blender", "washing machine",
+        "dishwasher", "microwave", "vacuum cleaner", "refrigerator",
+        "air conditioner", "toaster", "home products",
+
+        # Apparel
+        "apparel", "skirt", "socks", "sweater", "jeans", "shirt", "t-shirt",
+        "dress", "fashion", "clothing", "jackets", "jacket"
+    ]
 
     detected_product = None
     for word in keywords:

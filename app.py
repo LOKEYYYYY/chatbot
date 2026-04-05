@@ -58,11 +58,11 @@ def webhook():
 
     # Price filter
     if price_range == "cheap":
-        filtered = filtered[filtered['Price'] <= 1000]
+        filtered = filtered[filtered['Price'] <= 700]
     elif price_range == "mid range":
-        filtered = filtered[(filtered['Price'] > 1000) & (filtered['Price'] <= 3000)]
+        filtered = filtered[(filtered['Price'] > 700) & (filtered['Price'] <= 1400)]
     elif price_range == "expensive":
-        filtered = filtered[filtered['Price'] > 3000]
+        filtered = filtered[filtered['Price'] > 1400]
 
     # Max price 
     if max_price:

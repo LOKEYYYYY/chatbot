@@ -120,7 +120,8 @@ def webhook():
         for i, (_, row) in enumerate(results.iterrows(), start=1):
             reply += (
                 f"{i}. {row['Product Name']}\n"
-                f"   💰 RM{row['Price']} | ⭐ {row['Popularity Index']}\n\n"
+                f"   💰 RM{row['Price']:.2f}\n"
+                f"   ⭐ {row['Popularity Index']}\n\n"
             )
 
     return jsonify({"fulfillmentText": reply})

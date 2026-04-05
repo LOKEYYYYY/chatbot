@@ -11,27 +11,56 @@ def webhook():
     req = request.get_json()
     params = req['queryResult']['parameters']
 
-    product = params.get('product')
-    price_range = params.get('price_range')
-    preference = params.get('preference')
+    product = params.get('product') or ""
+    price_range = params.get('price_range') or ""
+    preference = params.get('preference') or ""
     max_price = params.get('max_price')
 
-    # Normalize preference
-    if preference in ["top selling", "best selling", "trending"]:
+    # Normalize preference (FIXED VERSION)
+    if preference:
+        preference = preference.lower().strip()
+
+        if preference in ["top selling", "best selling", "trending", "top popularity"]:
+            preference = "popular"
+
+        elif preference in ["sale", "deals", "discounted"]:
+            preference = "discount"
+
+        elif preference in ["top", "highest"]:
+            preference = "best"
+
+    # fallback if no category
+    if not preference:
         preference = "popular"
 
     filtered = df.copy()
 
+    #Get keyword before filtering
+    query_text = req['queryResult']['queryText'].lower()
+
+    keywords = ["laptop", "phone", "camera", "headphones", "watch", "tablet"]
+
+    detected_product = None
+    for word in keywords:
+        if word in query_text:
+            detected_product = word
+            break
+
+    # override product if keyword found
+    if detected_product:
+        product = detected_product
+
     # Filter by category
     if product:
         filtered = filtered[
-            (filtered['Category'].str.contains(product, case=False)) |
-            (filtered['Product Name'].str.contains(product, case=False))
+            filtered['Product Name'].str.contains(product, case=False, na=False)
         ]
 
     # Price filter
     if price_range == "cheap":
-        filtered = filtered[filtered['Price'] < 1000]
+        filtered = filtered[filtered['Price'] <= 1000]
+    elif price_range == "mid range":
+        filtered = filtered[(filtered['Price'] > 1000) & (filtered['Price'] <= 3000)]
     elif price_range == "expensive":
         filtered = filtered[filtered['Price'] > 3000]
 
@@ -47,6 +76,9 @@ def webhook():
         filtered = filtered.sort_values(by='Discount', ascending=False)
 
     elif preference == "best":
+        filtered = filtered.sort_values(by=['Popularity Index', 'Discount'], ascending=False)
+
+    elif preference == "high rating":
         filtered = filtered.sort_values(by='Popularity Index', ascending=False)
 
     results = filtered.head(3)

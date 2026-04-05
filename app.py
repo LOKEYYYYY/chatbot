@@ -38,19 +38,47 @@ def normalize_preference(pref):
 
 def detect_product(query_text):
     keyword_map = {
-        "laptop": ["laptop", "notebook", "macbook"],
-        "phone": ["phone", "smartphone", "iphone"],
-        "camera": ["camera"],
-        "headphones": ["headphones", "earphones"],
-        "shoes": ["sneakers", "boots", "heels", "sandals"],
-        "books": ["book", "novel", "comics"],
-        "appliances": ["microwave", "blender", "washing machine"],
-        "clothing": ["shirt", "jeans", "dress", "jacket"]
+        # Electronics
+        "electronics": [
+            "electronics", "gadgets", "camera", "smartwatch", "monitor",
+            "smartphone", "speaker", "tablet", "laptop", "tech", "gaming",
+            "gaming console", "headphones", "phone", "air cond"
+        ],
+
+        # Footwear
+        "footwear": [
+            "sneakers", "running shoes", "heels", "hiking shoes", "boots",
+            "sandals", "flats", "formal shoes", "slippers"
+        ],
+
+        # Books
+        "books": [
+            "book", "novel", "cookbooks", "non-fiction", "fiction",
+            "comics", "textbooks", "magazines", "biographies"
+        ],
+
+        # Home appliances
+        "appliances": [
+            "home appliances", "kitchen appliances", "blender",
+            "washing machine", "dishwasher", "microwave",
+            "vacuum cleaner", "refrigerator", "air conditioner",
+            "toaster"
+        ],
+
+        # Apparel
+        "clothing": [
+            "apparel", "skirt", "socks", "sweater", "jeans",
+            "shirt", "t-shirt", "dress", "fashion",
+            "clothing", "jacket"
+        ]
     }
 
-    for key, words in keyword_map.items():
-        if any(word in query_text for word in words):
-            return key
+    query_text = query_text.lower()
+
+    for category, keywords in keyword_map.items():
+        for word in keywords:
+            if word in query_text:
+                return word   # 🔥 return actual keyword (your original behavior)
 
     return ""
 

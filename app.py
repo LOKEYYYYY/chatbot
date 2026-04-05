@@ -169,6 +169,13 @@ def webhook():
     preference = normalize_preference(params.get('preference'))
     max_price = params.get('max_price')
 
+    # 🔥 FORCE override using user text (VERY IMPORTANT)
+    if any(word in query_text for word in ["cheap", "cheapest", "lowest price", "budget"]):
+        preference = "cheap"
+
+    elif any(word in query_text for word in ["expensive", "most expensive", "highest price", "premium"]):
+        preference = "expensive"
+
     # Smart extraction from text
     detected_product = detect_product(query_text)
     extracted_price = extract_max_price(query_text)

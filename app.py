@@ -39,10 +39,12 @@ def webhook():
     # Preference sorting
     if preference == "popular":
         filtered = filtered.sort_values(by='Popularity Index', ascending=False)
-    elif preference == "best":
-        filtered = filtered.sort_values(by='Rating', ascending=False)
+
     elif preference == "discount":
         filtered = filtered.sort_values(by='Discount', ascending=False)
+
+    elif preference == "best":
+        filtered = filtered.sort_values(by='Popularity Index', ascending=False)
 
     results = filtered.head(3)
 
@@ -51,7 +53,7 @@ def webhook():
     else:
         reply = "Here are some recommendations:\n"
         for _, row in results.iterrows():
-            reply += f"{row['Product Name']} - RM{row['Price']} ⭐{row['Rating']}\n"
+            reply += f"{row['Product Name']} - RM{row['Price']} ⭐{row['Popularity Index']}\n"
 
     return jsonify({"fulfillmentText": reply})
 

@@ -26,7 +26,9 @@ def normalize_preference(pref):
         "popular": ["top selling", "best selling", "trending", "top popularity"],
         "discount": ["sale", "deals", "discounted"],
         "best": ["top", "highest"],
-        "high rating": ["rating", "high rating"]
+        "high rating": ["rating", "high rating"],
+        "cheap": ["cheap", "cheapest", "lowest price", "budget"],
+        "expensive": ["expensive", "most expensive", "premium", "high price"]
     }
 
     for key, values in mapping.items():
@@ -124,6 +126,12 @@ def apply_sorting(filtered, preference):
 
     elif preference == "high rating":
         return filtered.sort_values(by='Popularity Index', ascending=False)
+    
+    elif preference == "cheap":
+        return filtered.sort_values(by='Price', ascending=True)   # 🔥 lowest first
+
+    elif preference == "expensive":
+        return filtered.sort_values(by='Price', ascending=False)  # 🔥 highest first
 
     return filtered
 

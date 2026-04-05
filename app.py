@@ -91,6 +91,8 @@ def webhook():
     elif price_range == "expensive":
         filtered = filtered[filtered['Price'] > 1400]
 
+    results = filtered.head(3)
+    
     # Max price 
     if max_price:
         filtered = filtered[filtered['Price'] <= max_price]
@@ -113,9 +115,13 @@ def webhook():
     if results.empty:
         reply = "Sorry, no products found."
     else:
-        reply = "Here are some recommendations:\n"
-        for _, row in results.iterrows():
-            reply += f"{row['Product Name']} - RM{row['Price']} ⭐{row['Popularity Index']}\n"
+        reply = "✨ Recommended Products ✨\n\n"
+
+        for i, (_, row) in enumerate(results.iterrows(), start=1):
+            reply += (
+                f"{i}. {row['Product Name']}\n"
+                f"   💰 RM{row['Price']} | ⭐ {row['Popularity Index']}\n\n"
+            )
 
     return jsonify({"fulfillmentText": reply})
 

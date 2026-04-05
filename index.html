@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot</title>
+</head>
+<body>
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        height: 100vh;
+        
+        /* Smooth gradient instead of hard split */
+        background: linear-gradient(135deg, #BCE7FC 0%, #C491B1 100%);
+    }
+
+    /* remove harsh top bar → replace with soft overlay */
+    body::before {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.2), transparent);
+    }
+
+    /* center content properly */
+    .container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+    }
+
+    /* glass box */
+    .box {
+        width: 60%;
+        padding: 40px;
+        background: rgba(255,255,255,0.6);
+        border-radius: 20px;
+        backdrop-filter: blur(12px);
+        text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    }
+
+    /* text */
+    h1 {
+        font-size: 40px;
+        color: #1e293b;
+    }
+
+    p {
+        font-size: 18px;
+        color: #334155;
+    }
+</style>
+
+<script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
+<div class="container">
+    <div class="box">
+        <h1>🛒 E-commerce Chatbot</h1>
+        <p>Find the best products, deals, and recommendations instantly!</p>
+    </div>
+</div>
+<df-messenger
+  chat-title="EcomBot"
+  agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
+  language-code="en"
+></df-messenger>
+</body>
+</html>

@@ -116,9 +116,9 @@ def webhook():
         reply = "Sorry, no products found."
     else:
         reply = "✨ Recommended Products ✨\n\n"
-
+    
         for i, (_, row) in enumerate(results.iterrows(), start=1):
-            reply += f"{i}) {row['Product Name']} | RM{row['Price']:.2f} | ⭐ {row['Popularity Index']}\n\n"
+            reply += f"{i}) {row['Product Name']} | RM{row['Price']:.2f} | ⭐ {row['Popularity Index']}   \n"
 
     return jsonify({"fulfillmentText": reply})
 

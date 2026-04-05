@@ -139,7 +139,7 @@ def format_reply(results):
         f"{i}) {row['Product Name']}\n"
         f"   💰 RM{row['Price']:.2f}\n"
         f"   ⭐ {row['Popularity Index']} | 🔻 {row['Discount']}%\n"
-        f"   🏷 {row['Category']}"
+        f"   🏷️ {row['Category']}"
         for i, (_, row) in enumerate(results.iterrows(), start=1)
     ]
 

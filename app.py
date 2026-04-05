@@ -51,7 +51,7 @@ def webhook():
 
         # Footwear
         "sneakers", "running shoes", "heels", "hiking shoes", "boots",
-        "sandals", "flats", "formal shoes", "slippers",
+        "sandals", "flats", "formal shoes", "slippers", "footwears"
 
         # Books
         "book", "novel", "cookbooks", "non-fiction", "fiction", "comics",
@@ -60,7 +60,7 @@ def webhook():
         # Home appliances
         "home appliances", "kitchen appliances", "blender", "washing machine",
         "dishwasher", "microwave", "vacuum cleaner", "refrigerator",
-        "air conditioner", "toaster", "home products",
+        "air conditioner", "toaster", "home products", "books"
 
         # Apparel
         "apparel", "skirt", "socks", "sweater", "jeans", "shirt", "t-shirt",

@@ -16,7 +16,11 @@ def webhook():
     preference = params.get('preference') or ""
     max_price = params.get('max_price')
 
-    # Normalize preference (FIXED VERSION)
+    # Fix list issue (dialogflow use list py use str)
+    if isinstance(preference, list):
+        preference = preference[0] if preference else None
+
+    # Normalize preference 
     if preference:
         preference = preference.lower().strip()
 

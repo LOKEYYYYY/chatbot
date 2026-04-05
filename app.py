@@ -8,6 +8,8 @@ app = Flask(__name__)
 # Load dataset once
 df = pd.read_csv("products.csv")
 
+session_memory = {}
+
 
 # -------------------------------
 # Helper Functions
@@ -164,6 +166,38 @@ def webhook():
     params = req['queryResult']['parameters']
     query_text = req['queryResult']['queryText'].lower()
 
+    intent_name = req['queryResult']['intent']['displayName']
+    session_id = req['session']
+
+    # 🔥 HANDLE SHOW MORE FIRST
+    if intent_name == "Show More Intent":
+        if session_id in session_memory:
+            memory = session_memory[session_id]
+    
+            product = memory["product"]
+            preference = memory["preference"]
+            price_range = memory["price_range"]
+            max_price = memory["max_price"]
+            page = memory.get("page", 1) + 1
+    
+            filtered = apply_filters(df, product, price_range, max_price)
+            filtered = apply_sorting(filtered, preference)
+    
+            start = (page - 1) * 3
+            end = start + 3
+            results = filtered.iloc[start:end]
+    
+            if results.empty:
+                return jsonify({"fulfillmentText": "No more results 😢"})
+    
+            session_memory[session_id]["page"] = page
+    
+            reply = format_reply(results)
+            return jsonify({"fulfillmentText": reply})
+    
+        else:
+            return jsonify({"fulfillmentText": "Please search for something first 😊"})
+
     product = params.get('product') or ""
     price_range = params.get('price_range') or ""
     preference = normalize_preference(params.get('preference'))
@@ -193,6 +227,15 @@ def webhook():
     results = filtered.head(3)
 
     reply = format_reply(results)
+
+    # 🔥 SAVE CONTEXT
+    session_memory[session_id] = {
+        "product": product,
+        "preference": preference,
+        "price_range": price_range,
+        "max_price": max_price,
+        "page": 1
+    }
 
     return jsonify({"fulfillmentText": reply})
 

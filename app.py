@@ -117,7 +117,7 @@ def webhook():
     else:
         lines = [
             f"{i}) {row['Product Name']} | RM{row['Price']:.2f} | ⭐ {row['Popularity Index']}"
-            for i, (_, row) in enumerate(results.iterrows(), start=" ")
+            for i, (_, row) in enumerate(results.iterrows(), start=1)
         ]
 
         reply = "✨ Recommended Products ✨\n\n" + "\n".join(lines)

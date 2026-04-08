@@ -89,8 +89,19 @@ def apply_filters(df, product, price_range, max_price):
     filtered = df.copy()
 
     if product:
+        # 🔥 Map internal category → dataset category
+        category_map = {
+            "electronics": "Electronics",
+            "footwear": "Footwear",
+            "books": "Books",
+            "appliances": "Appliances",
+            "clothing": "Apparel"
+        }
+
+        mapped_category = category_map.get(product, product)
+
         filtered = filtered[
-            (filtered['Category'].str.contains(product, case=False, na=False)) |
+            (filtered['Category'].str.contains(mapped_category, case=False, na=False)) |
             (filtered['Product Name'].str.contains(product, case=False, na=False))
         ]
 

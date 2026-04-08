@@ -236,6 +236,123 @@ def save_last_shown_price(session_id, results):
         session_memory[session_id]["last_max_shown_price"] = float(results['Price'].max())
 
 
+def has_more_results(session_id, filtered_total):
+    """
+    Checks whether there are more results beyond the current page.
+    Returns True if there are unseen results remaining.
+    """
+    if session_id not in session_memory:
+        return False
+    page = session_memory[session_id].get("page", 1)
+    shown_so_far = page * 3
+    return shown_so_far < filtered_total
+
+
+def append_more_prompt(reply, session_id, filtered_total):
+    """
+    Appends a friendly 'want to see more?' nudge to the reply
+    if there are more results available beyond the current page.
+    """
+    if has_more_results(session_id, filtered_total):
+        reply += "\n\n👀 Want to see more options? Just say *'show more'*!"
+    else:
+        reply += "\n\n✅ That's all the results for this search."
+    return reply
+
+
+def detect_yes_intent(query_text):
+    """
+    Detects if the user is saying yes/confirm in response to the 'want more?' prompt.
+    Returns True if the user is affirming, False otherwise.
+    """
+    query_text = query_text.lower().strip()
+    yes_phrases = [
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "show more",
+        "more", "next", "continue", "go on", "show me more", "see more",
+        "please", "yes please", "of course", "why not"
+    ]
+    return any(phrase == query_text or query_text.startswith(phrase) for phrase in yes_phrases)
+
+
+def detect_no_intent(query_text):
+    """
+    Detects if the user is declining / saying no more.
+    Returns True if the user is declining.
+    """
+    query_text = query_text.lower().strip()
+    no_phrases = [
+        "no", "nope", "nah", "no thanks", "no thank you", "that's enough",
+        "stop", "done", "enough", "i'm good", "im good", "no more"
+    ]
+    return any(phrase == query_text or query_text.startswith(phrase) for phrase in no_phrases)
+
+
+def get_summary_label(preference, product):
+    """
+    Builds a short human-readable label of the current search context
+    for use in follow-up prompts (e.g. 'cheap socks', 'popular laptops').
+    """
+    parts = []
+    if preference and preference not in ("popular", "best"):
+        parts.append(preference)
+    if product:
+        parts.append(product)
+    return " ".join(parts) if parts else "products"
+
+
+def suggest_related_categories(product):
+    """
+    Suggests related categories when a search returns no results,
+    giving the user a smarter fallback than a generic list.
+    """
+    related_map = {
+        "electronics": ["appliances", "gadgets"],
+        "footwear": ["clothing", "accessories"],
+        "books": ["magazines", "stationery"],
+        "appliances": ["electronics", "home goods"],
+        "clothing": ["footwear", "accessories"]
+    }
+    return related_map.get(product, [])
+
+
+def format_no_results_reply(product):
+    """
+    Returns a smarter no-results message that includes related category suggestions
+    when available, otherwise falls back to the top 3 available categories.
+    """
+    related = suggest_related_categories(product)
+
+    if related:
+        reply = f"😢 No results found for *{product}*.\n\nYou might also like:\n"
+        reply += "\n".join([f"• {r.title()}" for r in related])
+        reply += "\n\nOr type a category to search again 🔍"
+    else:
+        suggestions = df['Category'].dropna().unique()[:3]
+        reply = "😢 No exact match found.\n\nTry searching for:\n"
+        reply += "\n".join([f"• {s}" for s in suggestions])
+
+    return reply
+
+
+def format_reply(results, product=""):
+    """
+    Formats the product list reply. Uses smarter no-results messaging
+    when a product context is available.
+    """
+    if results.empty:
+        return format_no_results_reply(product)
+
+    lines = [
+        f"{i}) {row['Product Name']}\n"
+        f"   💰 RM{row['Price']:.2f}\n"
+        f"   ⭐ {row['Popularity Index']} | 🔻 {row['Discount']}%\n"
+        f"   🏷️ {row['Category']}"
+        for i, (_, row) in enumerate(results.iterrows(), start=1)
+    ]
+
+    return "✨ Recommended Products ✨\n\n" + "\n\n".join(lines)
+
+
 # -------------------------------
 # Main Webhook
 # -------------------------------
@@ -258,10 +375,23 @@ def webhook():
 
         return jsonify({"fulfillmentText": reply})
 
-    # HANDLE SHOW MORE
-    # Fully restores previous search context (product + preference + filters)
-    # so "show more" always continues the exact same search, not a fresh one.
-    if intent_name == "Show More Intent":
+    # HANDLE USER SAYING "NO" after a 'want more?' prompt
+    # Gracefully ends the browsing session and thanks the user.
+    if intent_name == "Negative Intent" or detect_no_intent(query_text):
+        if session_id in session_memory and session_memory[session_id].get("awaiting_more_confirm"):
+            session_memory[session_id]["awaiting_more_confirm"] = False
+            label = get_summary_label(
+                session_memory[session_id].get("preference", ""),
+                session_memory[session_id].get("product", "")
+            )
+            return jsonify({"fulfillmentText": f"No problem! Hope you found what you needed 😊\nFeel free to search for more {label} anytime!"})
+
+    # HANDLE SHOW MORE — triggered by intent OR by user saying yes to the 'want more?' nudge
+    if intent_name == "Show More Intent" or (
+        session_id in session_memory
+        and session_memory[session_id].get("awaiting_more_confirm")
+        and detect_yes_intent(query_text)
+    ):
         if session_id in session_memory:
             memory = session_memory[session_id]
 
@@ -285,12 +415,18 @@ def webhook():
             results = filtered.iloc[start:end]
 
             if results.empty:
-                return jsonify({"fulfillmentText": "No more results 😢"})
+                return jsonify({"fulfillmentText": "No more results 😢\n\nTry a different search to discover more products! 🔍"})
 
             session_memory[session_id]["page"] = page
+            session_memory[session_id]["awaiting_more_confirm"] = False
             save_last_shown_price(session_id, results)
 
-            reply = format_reply(results)
+            reply = format_reply(results, product)
+            reply = append_more_prompt(reply, session_id, len(filtered))
+
+            # Flag that we're waiting for user to confirm they want the next page
+            session_memory[session_id]["awaiting_more_confirm"] = has_more_results(session_id, len(filtered))
+
             return jsonify({"fulfillmentText": reply})
 
         else:
@@ -347,7 +483,7 @@ def webhook():
     else:
         results = filtered.head(3)
 
-    reply = format_reply(results)
+    reply = format_reply(results, product)
 
     # SAVE CONTEXT — includes query_text so Show More replays the exact same search
     session_memory[session_id] = {
@@ -356,10 +492,16 @@ def webhook():
         "price_range": price_range,
         "max_price": max_price,
         "query_text": query_text,
-        "page": 1
+        "page": 1,
+        "awaiting_more_confirm": False
     }
 
     save_last_shown_price(session_id, results)
+
+    # Append 'want more?' nudge only when showing a partial list (not show-all)
+    if "all" not in query_text and intent_name != "Show All" and not results.empty:
+        reply = append_more_prompt(reply, session_id, len(filtered))
+        session_memory[session_id]["awaiting_more_confirm"] = has_more_results(session_id, len(filtered))
 
     return jsonify({"fulfillmentText": reply})
 

@@ -85,25 +85,32 @@ def extract_max_price(query_text):
     return None
 
 
-def apply_filters(df, product, price_range, max_price):
+def apply_filters(df, product, price_range, max_price, query_text=""):
     filtered = df.copy()
 
     if product:
         # 🔥 Map internal category → dataset category
         category_map = {
-        "electronics": ["laptop", "phone", "tablet", "camera", "headphones"],
-        "footwear": ["shoes", "sneakers", "boots"],
-        "books": ["book", "novel"],
-        "appliances": ["microwave", "fridge", "air conditioner"],
-        "clothing": ["skirt", "socks", "shirt", "jeans", "jacket", "dress"]
+            "electronics": "Electronics",
+            "footwear": "Footwear",
+            "books": "Books",
+            "appliances": "Appliances",
+            "clothing": "Apparel"
         }
 
         mapped_category = category_map.get(product, product)
 
+        # 🔥 First filter by category
         filtered = filtered[
-            (filtered['Category'].str.contains(mapped_category, case=False, na=False)) |
-            (filtered['Product Name'].str.contains(product, case=False, na=False))
+            filtered['Category'].str.contains(mapped_category, case=False, na=False)
         ]
+
+        # 🔥 Then refine using actual keyword from user query
+        for word in query_text.split():
+            if len(word) > 3:  # avoid small words like "a", "me"
+                filtered = filtered[
+                    filtered['Product Name'].str.contains(word, case=False, na=False)
+                ] if not filtered.empty else filtered
 
     if price_range == "cheap":
         filtered = filtered[filtered['Price'] <= 700]
@@ -191,7 +198,7 @@ def webhook():
             max_price = memory["max_price"]
             page = memory.get("page", 1) + 1
     
-            filtered = apply_filters(df, product, price_range, max_price)
+            apply_filters(df, product, price_range, max_price, query_text)
 
             if filtered.empty:
                 return jsonify({"fulfillmentText": "No more results 😢 (filter returned empty)"})

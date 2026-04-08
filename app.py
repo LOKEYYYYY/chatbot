@@ -73,7 +73,7 @@ def detect_product(query_text):
     for category, keywords in keyword_map.items():
         for word in keywords:
             if word in query_text:
-                return category   # 🔥 FIX: return CATEGORY instead of word
+                return category
 
     return ""
 
@@ -89,7 +89,6 @@ def apply_filters(df, product, price_range, max_price, query_text=""):
     filtered = df.copy()
 
     if product:
-        # 🔥 Map internal category → dataset category
         category_map = {
             "electronics": "Electronics",
             "footwear": "Footwear",
@@ -100,17 +99,20 @@ def apply_filters(df, product, price_range, max_price, query_text=""):
 
         mapped_category = category_map.get(product, product)
 
-        # 🔥 First filter by category
+        # FIX 1: Filter by category first, then refine by keyword — but only
+        # narrow down further if the refined result is non-empty
         filtered = filtered[
             filtered['Category'].str.contains(mapped_category, case=False, na=False)
         ]
 
-        # 🔥 Then refine using actual keyword from user query
         for word in query_text.split():
-            if len(word) > 3:  # avoid small words like "a", "me"
-                filtered = filtered[
+            if len(word) > 3:
+                refined = filtered[
                     filtered['Product Name'].str.contains(word, case=False, na=False)
-                ] if not filtered.empty else filtered
+                ]
+                # FIX 2: Only apply keyword refinement if it doesn't wipe all results
+                if not refined.empty:
+                    filtered = refined
 
     if price_range == "cheap":
         filtered = filtered[filtered['Price'] <= 700]
@@ -137,12 +139,12 @@ def apply_sorting(filtered, preference):
 
     elif preference == "high rating":
         return filtered.sort_values(by='Popularity Index', ascending=False)
-    
+
     elif preference == "cheap":
-        return filtered.sort_values(by='Price', ascending=True)   # 🔥 lowest first
+        return filtered.sort_values(by='Price', ascending=True)
 
     elif preference == "expensive":
-        return filtered.sort_values(by='Price', ascending=False)  # 🔥 highest first
+        return filtered.sort_values(by='Price', ascending=False)
 
     return filtered
 
@@ -178,7 +180,7 @@ def webhook():
     intent_name = req['queryResult']['intent']['displayName']
     session_id = req['session']
 
-    # 🔥 LIST ALL CATEGORIES
+    # LIST ALL CATEGORIES
     if intent_name == "List Categories":
         categories = df['Category'].dropna().unique()
 
@@ -187,36 +189,38 @@ def webhook():
 
         return jsonify({"fulfillmentText": reply})
 
-    # 🔥 HANDLE SHOW MORE FIRST
+    # HANDLE SHOW MORE
     if intent_name == "Show More Intent":
         if session_id in session_memory:
             memory = session_memory[session_id]
-    
+
             product = memory.get("product", "")
             preference = memory["preference"]
             price_range = memory["price_range"]
             max_price = memory["max_price"]
             page = memory.get("page", 1) + 1
-    
-            apply_filters(df, product, price_range, max_price, query_text)
+
+            # FIX 3: Was calling apply_filters but discarding the result;
+            # must assign it to `filtered` before using it
+            filtered = apply_filters(df, product, price_range, max_price, query_text)
 
             if filtered.empty:
                 return jsonify({"fulfillmentText": "No more results 😢 (filter returned empty)"})
-            
+
             filtered = apply_sorting(filtered, preference)
-    
+
             start = (page - 1) * 3
             end = start + 3
             results = filtered.iloc[start:end]
-    
+
             if results.empty:
                 return jsonify({"fulfillmentText": "No more results 😢"})
-    
+
             session_memory[session_id]["page"] = page
-    
+
             reply = format_reply(results)
             return jsonify({"fulfillmentText": reply})
-    
+
         else:
             return jsonify({"fulfillmentText": "Please search for something first 😊"})
 
@@ -225,7 +229,7 @@ def webhook():
     preference = normalize_preference(params.get('preference'))
     max_price = params.get('max_price')
 
-    # 🔥 FORCE override using user text (VERY IMPORTANT)
+    # FORCE override using user text
     if any(word in query_text for word in ["cheap", "cheapest", "lowest price", "budget"]):
         preference = "cheap"
 
@@ -244,11 +248,11 @@ def webhook():
     if extracted_price:
         max_price = extracted_price
 
-    # Apply filtering + sorting
-    filtered = apply_filters(df, product, price_range, max_price)
+    # FIX 4: Pass query_text into apply_filters so keyword refinement works
+    filtered = apply_filters(df, product, price_range, max_price, query_text)
     filtered = apply_sorting(filtered, preference)
 
-    # 🔥 SHOW ALL support
+    # SHOW ALL support
     if "all" in query_text or intent_name == "Show All":
         results = filtered
     else:
@@ -256,7 +260,7 @@ def webhook():
 
     reply = format_reply(results)
 
-    # 🔥 SAVE CONTEXT
+    # SAVE CONTEXT
     session_memory[session_id] = {
         "product": product,
         "preference": preference,

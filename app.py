@@ -91,11 +91,11 @@ def apply_filters(df, product, price_range, max_price):
     if product:
         # 🔥 Map internal category → dataset category
         category_map = {
-            "electronics": "Electronics",
-            "footwear": "Footwear",
-            "books": "Books",
-            "appliances": "Appliances",
-            "clothing": "Apparel"
+        "electronics": ["laptop", "phone", "tablet", "camera", "headphones"],
+        "footwear": ["shoes", "sneakers", "boots"],
+        "books": ["book", "novel"],
+        "appliances": ["microwave", "fridge", "air conditioner"],
+        "clothing": ["skirt", "socks", "shirt", "jeans", "jacket", "dress"]
         }
 
         mapped_category = category_map.get(product, product)

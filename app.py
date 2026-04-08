@@ -5,15 +5,14 @@ import os
 
 app = Flask(__name__)
 
-# Load dataset
+# Load dataset once
 df = pd.read_csv("products.csv")
 
-# Store user session memory
 session_memory = {}
 
 
 # -------------------------------
-# HELPER FUNCTIONS
+# Helper Functions
 # -------------------------------
 
 def normalize_preference(pref):
@@ -26,10 +25,12 @@ def normalize_preference(pref):
     pref = pref.lower().strip()
 
     mapping = {
-        "popular": ["top", "best selling", "trending"],
-        "discount": ["discount", "sale", "deal"],
-        "cheap": ["cheap", "cheapest", "budget", "lowest price"],
-        "expensive": ["expensive", "premium", "high price"]
+        "popular": ["top selling", "best selling", "trending", "top popularity"],
+        "discount": ["sale", "deals", "discounted"],
+        "best": ["top", "highest"],
+        "high rating": ["rating", "high rating"],
+        "cheap": ["cheap", "cheapest", "lowest price", "budget"],
+        "expensive": ["expensive", "most expensive", "premium", "high price"]
     }
 
     for key, values in mapping.items():
@@ -40,20 +41,39 @@ def normalize_preference(pref):
 
 
 def detect_product(query_text):
-    query_text = query_text.lower()
-
-    category_map = {
-        "electronics": ["laptop", "phone", "tablet", "camera", "headphones"],
-        "footwear": ["shoes", "sneakers", "boots"],
-        "books": ["book", "novel"],
-        "appliances": ["microwave", "fridge", "air conditioner"],
-        "clothing": ["shirt", "jeans", "jacket"]
+    keyword_map = {
+        "electronics": [
+            "electronics", "gadgets", "camera", "smartwatch", "monitor",
+            "smartphone", "speaker", "tablet", "laptop", "tech", "gaming",
+            "gaming console", "headphones", "phone", "air cond"
+        ],
+        "footwear": [
+            "sneakers", "running shoes", "heels", "hiking shoes", "boots",
+            "sandals", "flats", "formal shoes", "slippers"
+        ],
+        "books": [
+            "book", "novel", "cookbooks", "non-fiction", "fiction",
+            "comics", "textbooks", "magazines", "biographies"
+        ],
+        "appliances": [
+            "home appliances", "kitchen appliances", "blender",
+            "washing machine", "dishwasher", "microwave",
+            "vacuum cleaner", "refrigerator", "air conditioner",
+            "toaster"
+        ],
+        "clothing": [
+            "apparel", "skirt", "socks", "sweater", "jeans",
+            "shirt", "t-shirt", "dress", "fashion",
+            "clothing", "jacket"
+        ]
     }
 
-    for category, keywords in category_map.items():
+    query_text = query_text.lower()
+
+    for category, keywords in keyword_map.items():
         for word in keywords:
             if word in query_text:
-                return category  # RETURN CATEGORY
+                return category   # 🔥 FIX: return CATEGORY instead of word
 
     return ""
 
@@ -68,21 +88,19 @@ def extract_max_price(query_text):
 def apply_filters(df, product, price_range, max_price):
     filtered = df.copy()
 
-    # Filter by category
     if product:
         filtered = filtered[
-            filtered['Category'].str.contains(product, case=False, na=False)
+            (filtered['Category'].str.contains(product, case=False, na=False)) |
+            (filtered['Product Name'].str.contains(product, case=False, na=False))
         ]
 
-    # Price range
     if price_range == "cheap":
         filtered = filtered[filtered['Price'] <= 700]
-    elif price_range == "mid":
+    elif price_range == "mid range":
         filtered = filtered[(filtered['Price'] > 700) & (filtered['Price'] <= 1400)]
     elif price_range == "expensive":
         filtered = filtered[filtered['Price'] > 1400]
 
-    # Max price
     if max_price:
         filtered = filtered[filtered['Price'] <= max_price]
 
@@ -96,120 +114,131 @@ def apply_sorting(filtered, preference):
     elif preference == "discount":
         return filtered.sort_values(by='Discount', ascending=False)
 
+    elif preference == "best":
+        return filtered.sort_values(by=['Popularity Index', 'Discount'], ascending=False)
+
+    elif preference == "high rating":
+        return filtered.sort_values(by='Popularity Index', ascending=False)
+    
     elif preference == "cheap":
-        return filtered.sort_values(by='Price', ascending=True)
+        return filtered.sort_values(by='Price', ascending=True)   # 🔥 lowest first
 
     elif preference == "expensive":
-        return filtered.sort_values(by='Price', ascending=False)
+        return filtered.sort_values(by='Price', ascending=False)  # 🔥 highest first
 
     return filtered
 
 
 def format_reply(results):
     if results.empty:
-        return "😢 No products found. Try another search."
+        suggestions = df['Category'].dropna().unique()[:3]
+        reply = "😢 No exact match found.\n\nTry searching for:\n"
+        reply += "\n".join([f"• {s}" for s in suggestions])
+        return reply
 
-    reply = "✨ Recommended Products ✨\n\n"
+    lines = [
+        f"{i}) {row['Product Name']}\n"
+        f"   💰 RM{row['Price']:.2f}\n"
+        f"   ⭐ {row['Popularity Index']} | 🔻 {row['Discount']}%\n"
+        f"   🏷️ {row['Category']}"
+        for i, (_, row) in enumerate(results.iterrows(), start=1)
+    ]
 
-    for i, (_, row) in enumerate(results.iterrows(), start=1):
-        reply += (
-            f"{i}) {row['Product Name']}\n"
-            f"   💰 RM{row['Price']:.2f}\n"
-            f"   ⭐ {row['Popularity Index']} | 🔻 {row['Discount']}%\n"
-            f"   🏷️ {row['Category']}\n\n"
-        )
-
-    return reply.strip()
+    return "✨ Recommended Products ✨\n\n" + "\n\n".join(lines)
 
 
 # -------------------------------
-# MAIN WEBHOOK
+# Main Webhook
 # -------------------------------
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     req = request.get_json()
-
-    query_text = req['queryResult']['queryText'].lower()
     params = req['queryResult']['parameters']
+    query_text = req['queryResult']['queryText'].lower()
+
     intent_name = req['queryResult']['intent']['displayName']
     session_id = req['session']
 
-    # -------------------------------
-    # 1. LIST CATEGORIES
-    # -------------------------------
+    # 🔥 LIST ALL CATEGORIES
     if intent_name == "List Categories":
-        categories = sorted(df['Category'].dropna().unique())
-        reply = "🛍️ Available categories:\n\n"
+        categories = df['Category'].dropna().unique()
+
+        reply = "🛍️ We have these product categories:\n\n"
         reply += "\n".join([f"• {c}" for c in categories])
+
         return jsonify({"fulfillmentText": reply})
 
+    # 🔥 HANDLE SHOW MORE FIRST
+    if intent_name == "Show More Intent":
+        if session_id in session_memory:
+            memory = session_memory[session_id]
+    
+            product = memory.get("product", "")
+            preference = memory["preference"]
+            price_range = memory["price_range"]
+            max_price = memory["max_price"]
+            page = memory.get("page", 1) + 1
+    
+            filtered = apply_filters(df, product, price_range, max_price)
 
-    # -------------------------------
-    # 2. SHOW MORE
-    # -------------------------------
-    if intent_name == "Show More":
-        if session_id not in session_memory:
-            return jsonify({"fulfillmentText": "Please search first 😊"})
+            if filtered.empty:
+                return jsonify({"fulfillmentText": "No more results 😢 (filter returned empty)"})
+            
+            filtered = apply_sorting(filtered, preference)
+    
+            start = (page - 1) * 3
+            end = start + 3
+            results = filtered.iloc[start:end]
+    
+            if results.empty:
+                return jsonify({"fulfillmentText": "No more results 😢"})
+    
+            session_memory[session_id]["page"] = page
+    
+            reply = format_reply(results)
+            return jsonify({"fulfillmentText": reply})
+    
+        else:
+            return jsonify({"fulfillmentText": "Please search for something first 😊"})
 
-        memory = session_memory[session_id]
-
-        filtered = apply_filters(df, memory["product"], memory["price_range"], memory["max_price"])
-        filtered = apply_sorting(filtered, memory["preference"])
-
-        page = memory.get("page", 1) + 1
-        start = (page - 1) * 3
-        end = start + 3
-
-        results = filtered.iloc[start:end]
-
-        if results.empty:
-            return jsonify({"fulfillmentText": "No more results 😢"})
-
-        session_memory[session_id]["page"] = page
-
-        return jsonify({"fulfillmentText": format_reply(results)})
-
-
-    # -------------------------------
-    # 3. NORMAL SEARCH
-    # -------------------------------
     product = params.get('product') or ""
     price_range = params.get('price_range') or ""
     preference = normalize_preference(params.get('preference'))
     max_price = params.get('max_price')
 
-    # Detect preference manually
-    if any(word in query_text for word in ["cheap", "cheapest", "budget"]):
+    # 🔥 FORCE override using user text (VERY IMPORTANT)
+    if any(word in query_text for word in ["cheap", "cheapest", "lowest price", "budget"]):
         preference = "cheap"
-    elif any(word in query_text for word in ["expensive", "premium"]):
+
+    elif any(word in query_text for word in ["expensive", "most expensive", "highest price", "premium"]):
         preference = "expensive"
 
-    # Detect product
+    # Smart extraction from text
     detected_product = detect_product(query_text)
+    extracted_price = extract_max_price(query_text)
+
     if detected_product:
         product = detected_product
-    elif session_id in session_memory:
-        product = session_memory[session_id]["product"]
+    elif not product and session_id in session_memory:
+        product = session_memory[session_id].get("product", "")
 
-    # Extract price
-    extracted_price = extract_max_price(query_text)
     if extracted_price:
         max_price = extracted_price
 
-    # Apply logic
+    # Apply filtering + sorting
     filtered = apply_filters(df, product, price_range, max_price)
     filtered = apply_sorting(filtered, preference)
 
-    # -------------------------------
-    # 4. SHOW ALL
-    # -------------------------------
+    # 🔥 SHOW ALL support
     if "all" in query_text or intent_name == "Show All":
         results = filtered
     else:
         results = filtered.head(3)
 
-    # Save memory
+    reply = format_reply(results)
+
+    # 🔥 SAVE CONTEXT
     session_memory[session_id] = {
         "product": product,
         "preference": preference,
@@ -218,11 +247,12 @@ def webhook():
         "page": 1
     }
 
-    return jsonify({"fulfillmentText": format_reply(results)})
+    return jsonify({"fulfillmentText": reply})
 
 
 # -------------------------------
-# RUN APP
+# Run App
 # -------------------------------
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

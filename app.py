@@ -30,7 +30,7 @@ INTENT_WELCOME = "Default Welcome Intent"
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
-# FIX 1: Generic/stop words that should never count as product-name keyword matches.
+# ===== Stop words: never count these as meaningful product-name tokens =====
 # This prevents "shoes" or "hoodie" in the query from matching unrelated product names
 # word-by-word, and stops pure category words from triggering detect_products_from_text.
 GENERIC_WORDS = {
@@ -42,8 +42,139 @@ GENERIC_WORDS = {
     "with", "in", "on", "at", "of", "to", "my", "i", "like", "give",
 }
 
+# ===== Build a dynamic term index from the CSV at startup =====
+# Scans every product name and description to collect all searchable
+# item-type keywords that actually exist in the dataset.  At query time we
+# use this index instead of a hardcoded list, so ANY item type
+# (tee, pants, slides, bag, tights, socks, backpack …) can be paired.
+
+def build_csv_term_index(dataframe):
+    """
+    Returns a set of lowercase single-word and two-word phrases that appear
+    in product names/descriptions and are meaningful item-type descriptors.
+    """
+    text_cols = ["name", "description", "category"]
+
+    noise = {
+        "and", "or", "the", "a", "an", "for", "me", "please", "show", "find",
+        "get", "want", "need", "some", "any", "under", "below", "above", "around",
+        "with", "in", "on", "at", "of", "to", "my", "i", "like", "give",
+        "size", "plus", "pairs", "set", "pack", "new", "best", "great", "good",
+        "sport", "adidas", "color", "fit", "designed", "move", "future", "icons",
+        "logo", "graphic", "classic", "essentials", "brand", "love", "repeat",
+        "high", "low", "mid", "full", "zip", "slim", "loose", "cropped", "crop",
+        "long", "short", "woven", "knit", "stretch", "print", "printed", "stripe",
+        "stripes", "letter", "crew", "waist", "neck", "sleeve", "performance",
+        "cushioned", "ultralight", "allover", "comfort", "soft", "primegreen",
+        "primeblue", "aeroready", "heat", "rdy", "super", "ultra", "x", "k",
+        "l", "w", "n", "no", "vs", "3", "2", "6", "7", "8", "20", "21",
+    }
+
+    term_set = set()
+
+    for col in text_cols:
+        if col not in dataframe.columns:
+            continue
+        for text in dataframe[col].dropna().astype(str):
+            words = re.findall(r"[a-z]+", text.lower())
+            for w in words:
+                if len(w) >= 3 and w not in noise:
+                    term_set.add(w)
+            # Capture two-word descriptive phrases (e.g. "tank top", "swim shorts")
+            for i in range(len(words) - 1):
+                bigram = words[i] + " " + words[i + 1]
+                if words[i] not in noise and words[i + 1] not in noise and len(bigram) >= 6:
+                    term_set.add(bigram)
+
+    return term_set
+
+
+# Build the index once at startup
+CSV_TERM_INDEX = build_csv_term_index(df)
+
+
+def extract_query_item_terms(query_text, dataframe):
+    """
+    Scans the user query against the CSV term index and returns every
+    item-type term that (a) appears in the query AND (b) actually matches
+    at least one product in name, description, or category.
+
+    This replaces the old hardcoded ["shoes","hoodie","shorts","shirt","jacket"]
+    list so that ANY pairing works — tee + pants, socks + bag, slides + tights,
+    tights + backpack, etc.
+    """
+    if not query_text:
+        return []
+
+    text = query_text.lower()
+    found_terms = []
+
+    for term in CSV_TERM_INDEX:
+        # Term must appear as a whole word/phrase boundary in the query
+        pattern = r"\b" + re.escape(term) + r"\b"
+        if not re.search(pattern, text):
+            continue
+
+        # Confirm the term actually matches something in the dataset
+        for col in ["name", "description", "category"]:
+            if col not in dataframe.columns:
+                continue
+            if dataframe[col].str.contains(re.escape(term), case=False, na=False).any():
+                found_terms.append(term)
+                break
+
+    # Remove shorter terms that are substrings of longer matched phrases
+    # e.g. if both "tee" and "graphic tee" matched, keep only "graphic tee"
+    found_terms.sort(key=len, reverse=True)
+    deduped = []
+    for term in found_terms:
+        if not any(term in longer for longer in deduped):
+            deduped.append(term)
+
+    return deduped
+
+
+def extract_terms_from_query_text(query_text, dataframe):
+    """
+    CSV-backed fallback search: when Dialogflow passes no useful parameters,
+    this function independently searches product names AND descriptions using
+    every meaningful token in the user query, so the backend can surface
+    results even when Dialogflow extracts nothing.
+
+    Returns a boolean mask over `dataframe` rows that are relevant.
+    """
+    if not query_text:
+        return pd.Series(False, index=dataframe.index)
+
+    text = query_text.lower()
+
+    stop = {
+        "and", "or", "the", "a", "an", "for", "me", "please", "show", "find",
+        "get", "want", "need", "some", "any", "under", "below", "above", "around",
+        "with", "in", "on", "at", "of", "to", "my", "i", "like", "give", "both",
+        "also", "can", "you", "do", "have", "what", "which", "is", "are", "just",
+    }
+    tokens = [w for w in re.findall(r"[a-z]+", text) if w not in stop and len(w) >= 3]
+
+    if not tokens:
+        return pd.Series(False, index=dataframe.index)
+
+    # A row matches if ANY meaningful query token appears in its name or description
+    combined = pd.Series(False, index=dataframe.index)
+    for token in tokens:
+        for col in ["name", "description"]:
+            if col in dataframe.columns:
+                combined |= dataframe[col].str.contains(re.escape(token), case=False, na=False)
+
+    return combined
+
 
 def detect_products_from_text(query_text, df):
+    """
+    Detects SPECIFIC named products (e.g. 'Superstar Shoes', 'ZX 1K Boost')
+    by matching meaningful (non-generic) keywords from each unique product
+    name against the query. Requires ALL non-generic words to match.
+    """
     if not query_text:
         return []
 
@@ -56,17 +187,15 @@ def detect_products_from_text(query_text, df):
     for name in df["name"].dropna().unique():
         name_lower = str(name).lower()
 
-        # FIX 1: Strip generic/stop words from the product name keywords before scoring.
-        # This ensures that a product like "Advantage Shoes" is not matched simply because
-        # the user said "shoes" — only meaningful brand/model words count.
+        # Strip generic/stop words so "Advantage Shoes" is not matched just
+        # because the user said "shoes" — only brand/model tokens count.
         words = [w for w in name_lower.split() if w not in GENERIC_WORDS]
 
         # If all words were generic, skip this product name entirely
         if not words:
             continue
 
-        # Require ALL meaningful (non-generic) keywords to appear in the query text
-        # so that "superstar shoes" correctly targets products containing "superstar"
+        # Require ALL meaningful keywords to appear in the query
         match_count = sum(1 for w in words if w in text)
 
         if match_count == len(words):
@@ -280,30 +409,35 @@ def webhook():
 
         results = search_products(params)
 
-        # FIX 2: Always initialise category_mask to all-False BEFORE the column check.
-        # Previously it was only created inside the if-block, so referencing it below
-        # would raise NameError when the "category" column was absent.
+        # FIX 2: Always initialise category_mask to all-False BEFORE use.
         category_mask = pd.Series(False, index=results.index)
 
-        # FIX 3: Extract ALL category terms mentioned in the query and combine them
-        # with OR so that "hoodie and shoes" returns both hoodies AND shoes instead
-        # of silently dropping one category.
-        # Some terms (e.g. "hoodie") live in the product *name* rather than the
-        # category column, so we search both columns for each term.
-        if "category" in df.columns or "name" in df.columns:
-            category_terms = ["shoes", "hoodie", "shorts", "shirt", "jacket"]
+        # FIX 3: Use the dynamic CSV term index instead of a hardcoded list.
+        # extract_query_item_terms scans the entire dataset vocabulary so any
+        # item type (tee, pants, tights, bag, socks, slides …) can be paired,
+        # not just the 5 terms that were previously hard-coded.
+        item_terms = extract_query_item_terms(query_text, df)
 
-            for term in category_terms:
-                if term in query_text.lower():
-                    if "category" in results.columns:
-                        category_mask |= results["category"].str.contains(term, case=False, na=False)
-                    if "name" in results.columns:
-                        category_mask |= results["name"].str.contains(term, case=False, na=False)
+        if item_terms:
+            for term in item_terms:
+                for col in ["category", "name", "description"]:
+                    if col in results.columns:
+                        category_mask |= results[col].str.contains(
+                            re.escape(term), case=False, na=False
+                        )
 
         if category_mask.any():
-            # Only apply if NO usage specified
+            # Only apply the item-type filter when no usage param came from Dialogflow
             if not get_param(params, "usage"):
                 results = results[category_mask]
+        else:
+            # ---- CSV-backed fallback ----
+            # Dialogflow extracted nothing AND no item terms were found via the
+            # index — run a broad keyword search over name + description so the
+            # backend can still find relevant products on its own.
+            fallback_mask = extract_terms_from_query_text(query_text, results)
+            if fallback_mask.any() and not get_param(params, "usage"):
+                results = results[fallback_mask]
 
         # FIX 4: Always initialise exact_matches to an empty DataFrame so the
         # reference below is safe even when matched_products is empty.

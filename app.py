@@ -10,7 +10,7 @@ df = pd.read_csv("adidas_usa.csv")
 df.columns = df.columns.str.strip().str.lower()
 print("COLUMNS:", df.columns)
 
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["POST", "GET"])
 def webhook():
     try:
         req = request.get_json()

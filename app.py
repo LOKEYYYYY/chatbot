@@ -130,6 +130,17 @@ def search_products(params):
                 if col in results.columns:
                     mask |= results[col].str.contains(str(term), case=False, na=False)
             results = results[mask]
+    # ===== STRONG USAGE FILTER (NEW) =====
+    if usage:
+        usage_mask = pd.Series(False, index=results.index)
+
+        for col in ["category", "description", "name"]:
+            if col in results.columns:
+                usage_mask |= results[col].str.contains(str(usage), case=False, na=False)
+
+        # Only apply if it actually finds something
+        if usage_mask.any():
+            results = results[usage_mask]
 
     # ===== PRICE FILTER =====
     min_price, max_price_range = parse_price_range(price_range)
@@ -248,7 +259,7 @@ def webhook():
         matched_products = detect_products_from_text(query_text, df)
 
         results = search_products(params)
-        
+
         # Ensure category relevance from user query
         if "category" in df.columns:
             category_terms = ["shoes", "hoodie", "shorts", "shirt", "jacket"]
@@ -259,7 +270,9 @@ def webhook():
                 if term in query_text.lower():
                     category_mask |= results["category"].str.contains(term, case=False, na=False)
 
-            if category_mask.any():
+        if category_mask.any():
+            # Only apply if NO usage specified
+            if not get_param(params, "usage"):
                 results = results[category_mask]
 
         if matched_products and "name" in results.columns:
@@ -270,7 +283,7 @@ def webhook():
 
             exact_matches = results[name_mask]
 
-        if not exact_matches.empty:
+        if matched_products and not exact_matches.empty:
             # Prioritize exact matches but DO NOT discard others
             results["priority"] = 0
             results.loc[name_mask, "priority"] = 1

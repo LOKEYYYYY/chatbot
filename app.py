@@ -5,18 +5,18 @@ import os
 
 app = Flask(__name__)
 
-# Load dataset once
+# Load and clean dataset once
 df = pd.read_csv("adidas_usa.csv")
-
-# Clean up dataset
-df = df[df['selling_price'].notna()]
-df['selling_price'] = df['selling_price'].astype(float)
+df = df[df['selling_price'].notna()].copy()
+df['selling_price']  = df['selling_price'].astype(float)
+df['original_price'] = pd.to_numeric(df['original_price'], errors='coerce')
 df['average_rating'] = pd.to_numeric(df['average_rating'], errors='coerce')
-df['reviews_count'] = pd.to_numeric(df['reviews_count'], errors='coerce').fillna(0).astype(int)
-df['availability'] = df['availability'].fillna('Unknown')
-df['color'] = df['color'].fillna('').str.strip()
-df['category'] = df['category'].fillna('').str.strip()
-df['breadcrumbs'] = df['breadcrumbs'].fillna('').str.strip()
+df['reviews_count']  = pd.to_numeric(df['reviews_count'], errors='coerce').fillna(0).astype(int)
+df['availability']   = df['availability'].fillna('Unknown')
+df['color']          = df['color'].fillna('')
+df['category']       = df['category'].fillna('')
+df['breadcrumbs']    = df['breadcrumbs'].fillna('')
+df['description']    = df['description'].fillna('')
 
 session_memory = {}
 
@@ -35,39 +35,31 @@ def normalize_preference(pref):
     pref = pref.lower().strip()
 
     mapping = {
-        "popular":      ["top selling", "best selling", "trending", "top popularity", "most reviewed"],
-        "discount":     ["sale", "deals", "discounted", "on sale"],
-        "best":         ["top", "highest", "best rated", "best value"],
-        "high rating":  ["rating", "high rating", "top rated"],
-        "cheap":        ["cheap", "cheapest", "lowest price", "budget", "affordable"],
-        "expensive":    ["expensive", "most expensive", "premium", "high price", "luxury"]
+        "popular":     ["top selling", "best selling", "trending", "top popularity"],
+        "discount":    ["sale", "deals", "discounted"],
+        "best":        ["top", "highest"],
+        "high rating": ["rating", "high rating"],
+        "cheap":       ["cheap", "cheapest", "lowest price", "budget"],
+        "expensive":   ["expensive", "most expensive", "premium", "high price"]
     }
 
     for key, values in mapping.items():
-        if pref in values or pref == key:
+        if pref in values:
             return key
 
     return pref
 
 
-def detect_category(query_text):
-    """Detect product category from query text."""
+def detect_product(query_text):
+    """Maps query keywords to dataset categories: Shoes, Clothing, Accessories."""
     keyword_map = {
-        "Shoes": [
-            "shoes", "sneakers", "boots", "sandals", "running shoes",
-            "bike shoes", "cleats", "slip-on", "loafers", "trainers",
-            "footwear", "kicks"
-        ],
-        "Clothing": [
-            "clothing", "shirt", "t-shirt", "jacket", "pants", "shorts",
-            "jersey", "dress", "hoodie", "sweater", "tracksuit",
-            "leggings", "top", "apparel", "outfit", "clothes"
-        ],
-        "Accessories": [
-            "accessories", "bag", "backpack", "cap", "hat", "socks",
-            "gloves", "belt", "wallet", "sunglasses", "watch",
-            "headband", "wristband"
-        ]
+        "Shoes":       ["shoes", "sneakers", "boots", "sandals", "trainers",
+                        "footwear", "kicks", "cleats", "loafers"],
+        "Clothing":    ["clothing", "clothes", "shirt", "t-shirt", "jacket",
+                        "pants", "shorts", "jersey", "dress", "hoodie",
+                        "sweater", "tracksuit", "leggings", "apparel", "outfit"],
+        "Accessories": ["accessories", "bag", "backpack", "cap", "hat", "socks",
+                        "gloves", "belt", "wallet", "headband", "wristband"]
     }
 
     query_text = query_text.lower()
@@ -79,33 +71,28 @@ def detect_category(query_text):
 
 
 def detect_color(query_text):
-    """Detect color preference from query text."""
-    colors = [
-        "black", "grey", "gray", "white", "blue", "purple", "pink",
-        "green", "yellow", "red", "multicolor", "gold", "burgundy", "beige"
-    ]
+    """Detects color from query text and returns capitalised form matching the dataset."""
+    colors = ["black", "grey", "gray", "white", "blue", "purple", "pink",
+              "green", "yellow", "red", "multicolor", "gold", "burgundy", "beige"]
     query_lower = query_text.lower()
     for color in colors:
         if color in query_lower:
-            # Normalize "gray" → "Grey" to match dataset
-            if color == "gray":
-                return "Grey"
-            return color.capitalize()
+            return "Grey" if color == "gray" else color.capitalize()
     return ""
 
 
 def detect_usage(query_text):
-    """Detect usage/sub-category from breadcrumbs context."""
+    """Detects gender/sport/style keywords that map to the breadcrumbs column."""
     usage_map = {
-        "Men":        ["men", "men's", "mens", "male", "guy", "guys"],
-        "Women":      ["women", "women's", "womens", "female", "lady", "ladies"],
-        "Kids":       ["kids", "kid", "children", "child", "boys", "girls", "junior"],
-        "Soccer":     ["soccer", "football"],
-        "Training":   ["training", "gym", "workout", "fitness"],
-        "Originals":  ["originals", "lifestyle", "casual", "retro", "classic"],
-        "Essentials": ["essentials", "basics", "everyday"],
-        "Swim":       ["swim", "swimming", "pool", "beach"],
-        "Five Ten":   ["five ten", "510", "mountain bike", "cycling", "bike"]
+        "Men":       ["men", "men's", "mens", "male"],
+        "Women":     ["women", "women's", "womens", "female", "ladies"],
+        "Kids":      ["kids", "kid", "children", "child", "boys", "girls", "junior"],
+        "Soccer":    ["soccer", "football"],
+        "Training":  ["training", "gym", "workout", "fitness"],
+        "Running":   ["running", "run", "jogging"],
+        "Originals": ["originals", "lifestyle", "casual", "retro", "classic"],
+        "Swim":      ["swim", "swimming", "pool"],
+        "Five Ten":  ["five ten", "mountain bike", "cycling", "bike"]
     }
 
     query_lower = query_text.lower()
@@ -117,25 +104,22 @@ def detect_usage(query_text):
 
 
 def extract_max_price(query_text):
-    """Extract explicit max price from query."""
     match = re.search(r"(under|below|less than)\s*\$?\s*(\d+)", query_text)
-    if match:
-        return float(match.group(2))
-    return None
+    return float(match.group(2)) if match else None
 
 
 def detect_relative_price_shift(query_text):
-    """Detect if user wants relatively higher or lower priced items."""
+    """
+    Detects if the user wants relatively more expensive or cheaper products
+    compared to what was last shown, without meaning the absolute most/least.
+    Returns: 'higher', 'lower', or None
+    """
     query_text = query_text.lower()
 
-    higher_phrases = [
-        "more expensive", "higher price", "pricier", "something more expensive",
-        "a bit more expensive", "slightly expensive", "higher end", "cost more"
-    ]
-    lower_phrases = [
-        "cheaper", "less expensive", "lower price", "something cheaper",
-        "a bit cheaper", "slightly cheaper", "lower end", "cost less"
-    ]
+    higher_phrases = ["more expensive", "higher price", "pricier",
+                      "something more expensive", "higher end", "cost more"]
+    lower_phrases  = ["cheaper", "less expensive", "lower price",
+                      "something cheaper", "lower end", "cost less"]
 
     for phrase in higher_phrases:
         if phrase in query_text:
@@ -147,63 +131,70 @@ def detect_relative_price_shift(query_text):
 
 
 def get_price_anchor(session_id):
+    """
+    Returns the max price of the last shown results stored in session,
+    used as a reference point for relative price shifts.
+    """
     if session_id in session_memory:
         return session_memory[session_id].get("last_max_shown_price", None)
     return None
 
 
-def apply_filters(df, category, color, usage, price_range, max_price, query_text=""):
-    """Apply all filters to the dataframe."""
+def apply_filters(df, product, price_range, max_price, query_text="",
+                  color="", usage=""):
     filtered = df.copy()
 
-    # Filter out-of-stock unless user explicitly asks for all
-    if "out of stock" not in query_text.lower() and "unavailable" not in query_text.lower():
-        in_stock = filtered[filtered['availability'] == 'InStock']
-        if not in_stock.empty:
-            filtered = in_stock
+    # Show only in-stock products by default
+    in_stock = filtered[filtered['availability'] == 'InStock']
+    if not in_stock.empty:
+        filtered = in_stock
 
     # Category filter
-    if category:
-        cat_filtered = filtered[filtered['category'].str.contains(category, case=False, na=False)]
+    if product:
+        cat_filtered = filtered[filtered['category'].str.contains(
+            product, case=False, na=False)]
         if not cat_filtered.empty:
             filtered = cat_filtered
 
     # Color filter
     if color:
-        color_filtered = filtered[filtered['color'].str.contains(color, case=False, na=False)]
+        color_filtered = filtered[filtered['color'].str.contains(
+            color, case=False, na=False)]
         if not color_filtered.empty:
             filtered = color_filtered
 
-    # Usage/breadcrumb filter (Men, Women, Kids, Soccer, etc.)
+    # Usage / breadcrumb filter — falls back to description if no breadcrumb match
     if usage:
-        usage_filtered = filtered[filtered['breadcrumbs'].str.contains(usage, case=False, na=False)]
+        usage_filtered = filtered[filtered['breadcrumbs'].str.contains(
+            usage, case=False, na=False)]
         if not usage_filtered.empty:
             filtered = usage_filtered
         else:
-            # Fallback: search usage keyword in description text
-            desc_filtered = filtered[filtered['description'].str.contains(usage, case=False, na=False)]
+            desc_filtered = filtered[filtered['description'].str.contains(
+                usage, case=False, na=False)]
             if not desc_filtered.empty:
                 filtered = desc_filtered
 
-    # Price range filter
+    # Price range filter  (cheap ≤ $35 | mid $35–$80 | expensive > $80)
     if price_range == "cheap":
-        filtered = filtered[filtered['selling_price'] <= 40]
+        filtered = filtered[filtered['selling_price'] <= 35]
     elif price_range == "mid range":
-        filtered = filtered[(filtered['selling_price'] > 40) & (filtered['selling_price'] <= 100)]
+        filtered = filtered[(filtered['selling_price'] > 35) &
+                            (filtered['selling_price'] <= 80)]
     elif price_range == "expensive":
-        filtered = filtered[filtered['selling_price'] > 100]
+        filtered = filtered[filtered['selling_price'] > 80]
 
-    # Absolute max price filter
     if max_price:
         filtered = filtered[filtered['selling_price'] <= max_price]
 
     # Keyword refinement on product name
+    stopwords = {"show", "find", "want", "need", "give", "tell", "look",
+                 "what", "with", "that", "have", "some", "most", "best",
+                 "under", "below", "adidas"}
     for word in query_text.split():
-        if len(word) > 3 and word.lower() not in [
-            "show", "find", "want", "need", "give", "tell", "look", "what",
-            "with", "that", "have", "some", "most", "best", "under", "below"
-        ]:
-            refined = filtered[filtered['name'].str.contains(word, case=False, na=False)]
+        if len(word) > 3 and word.lower() not in stopwords:
+            refined = filtered[filtered['name'].str.contains(
+                word, case=False, na=False)]
             if not refined.empty:
                 filtered = refined
 
@@ -211,6 +202,10 @@ def apply_filters(df, category, color, usage, price_range, max_price, query_text
 
 
 def apply_relative_price_filter(filtered, direction, price_anchor):
+    """
+    Filters results to be relatively higher or lower than the price anchor.
+    Falls back to full filtered set if result would be empty.
+    """
     if price_anchor is None:
         return filtered
 
@@ -228,10 +223,10 @@ def apply_sorting(filtered, preference):
     if preference == "popular":
         return filtered.sort_values(by='reviews_count', ascending=False)
     elif preference == "discount":
-        # Products with original_price available (discounted)
-        has_discount = filtered[filtered['original_price'].notna()]
-        if not has_discount.empty:
-            return has_discount.sort_values(by='selling_price', ascending=True)
+        # Prioritise products that actually have a marked-down original price
+        on_sale = filtered[filtered['original_price'].notna()]
+        if not on_sale.empty:
+            return on_sale.sort_values(by='selling_price', ascending=True)
         return filtered.sort_values(by='selling_price', ascending=True)
     elif preference in ("best", "high rating"):
         return filtered.sort_values(by='average_rating', ascending=False)
@@ -242,37 +237,79 @@ def apply_sorting(filtered, preference):
     return filtered.sort_values(by='reviews_count', ascending=False)
 
 
-def format_reply(results, category=""):
-    if results.empty:
-        return format_no_results_reply(category)
+def save_last_shown_price(session_id, results):
+    """
+    Saves the max price of the currently shown results into session memory
+    so relative price shifts ('more expensive', 'cheaper') have a reference point.
+    """
+    if not results.empty and session_id in session_memory:
+        session_memory[session_id]["last_max_shown_price"] = float(
+            results['selling_price'].max())
 
-    lines = []
-    for i, (_, row) in enumerate(results.iterrows(), start=1):
-        price_line = f"💲 ${row['selling_price']:.2f}"
-        if pd.notna(row.get('original_price')) and row['original_price'] > row['selling_price']:
-            price_line += f" ~~${row['original_price']:.2f}~~ 🔖 On Sale!"
 
-        rating_line = ""
-        if pd.notna(row['average_rating']):
-            rating_line = f"\n   ⭐ {row['average_rating']:.1f}/5.0 ({int(row['reviews_count'])} reviews)"
+def has_more_results(session_id, filtered_total):
+    """
+    Checks whether there are more results beyond the current page.
+    Returns True if there are unseen results remaining.
+    """
+    if session_id not in session_memory:
+        return False
+    page = session_memory[session_id].get("page", 1)
+    return (page * 3) < filtered_total
 
-        color_line = f"🎨 {row['color']}" if row['color'] else ""
-        avail = "✅ In Stock" if row['availability'] == "InStock" else "❌ Out of Stock"
 
-        entry = (
-            f"{i}) {row['name']}\n"
-            f"   {price_line}\n"
-            f"   {avail}"
-        )
-        if rating_line:
-            entry += rating_line
-        if color_line:
-            entry += f"\n   {color_line}"
-        entry += f"\n   🏷️ {row['category']} | {row['breadcrumbs']}"
+def append_more_prompt(reply, session_id, filtered_total):
+    """
+    Appends a friendly 'want to see more?' nudge to the reply
+    if there are more results available beyond the current page.
+    """
+    if has_more_results(session_id, filtered_total):
+        reply += "\n\n👀 Want to see more options? Just say *'show more'*!"
+    else:
+        reply += "\n\n✅ That's all the results for this search."
+    return reply
 
-        lines.append(entry)
 
-    return "👟 Adidas Products for You ✨\n\n" + "\n\n".join(lines)
+def detect_yes_intent(query_text):
+    """
+    Detects if the user is saying yes/confirm in response to the 'want more?' prompt.
+    Returns True if the user is affirming, False otherwise.
+    """
+    query_text = query_text.lower().strip()
+    yes_phrases = [
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "show more",
+        "more", "next", "continue", "go on", "show me more", "see more",
+        "please", "yes please", "of course", "why not"
+    ]
+    return any(phrase == query_text or query_text.startswith(phrase)
+               for phrase in yes_phrases)
+
+
+def detect_no_intent(query_text):
+    """
+    Detects if the user is declining / saying no more.
+    Returns True if the user is declining.
+    """
+    query_text = query_text.lower().strip()
+    no_phrases = [
+        "no", "nope", "nah", "no thanks", "no thank you", "that's enough",
+        "stop", "done", "enough", "i'm good", "im good", "no more"
+    ]
+    return any(phrase == query_text or query_text.startswith(phrase)
+               for phrase in no_phrases)
+
+
+def get_summary_label(preference, product):
+    """
+    Builds a short human-readable label of the current search context
+    for use in follow-up prompts (e.g. 'cheap Shoes', 'popular Clothing').
+    """
+    parts = []
+    if preference and preference not in ("popular", "best"):
+        parts.append(preference)
+    if product:
+        parts.append(product)
+    return " ".join(parts) if parts else "products"
 
 
 def suggest_related_categories(product):
@@ -288,73 +325,52 @@ def suggest_related_categories(product):
     return related_map.get(product, [])
 
 
-def format_no_results_reply(category=""):
+def format_no_results_reply(product):
     """
     Returns a smarter no-results message that includes related category suggestions
     when available, otherwise falls back to the top 3 available categories.
     """
-    related = suggest_related_categories(category)
+    related = suggest_related_categories(product)
 
     if related:
-        reply = f"😢 No results found for *{category}*.\n\nYou might also like:\n"
+        reply  = f"😢 No results found for *{product}*.\n\nYou might also like:\n"
         reply += "\n".join([f"• {r}" for r in related])
-        reply += "\n\nOr try adjusting your color, price, or usage filters 🔍"
+        reply += "\n\nOr type a category to search again 🔍"
     else:
-        suggestions = df['category'].dropna().unique()[:3]
-        reply = "😢 No exact match found.\n\nTry searching for:\n"
-        reply += "\n".join([f"• {s}" for s in suggestions if s])
+        suggestions = [c for c in df['category'].dropna().unique() if c][:3]
+        reply  = "😢 No exact match found.\n\nTry searching for:\n"
+        reply += "\n".join([f"• {s}" for s in suggestions])
 
     return reply
 
 
-def save_last_shown_price(session_id, results):
-    if not results.empty and session_id in session_memory:
-        session_memory[session_id]["last_max_shown_price"] = float(results['selling_price'].max())
+def format_reply(results, product=""):
+    """
+    Formats the product list reply. Uses smarter no-results messaging
+    when a product context is available.
+    """
+    if results.empty:
+        return format_no_results_reply(product)
 
+    lines = []
+    for i, (_, row) in enumerate(results.iterrows(), start=1):
+        # Price line — show original + sale flag when discounted
+        price_line = f"💲 ${row['selling_price']:.2f}"
+        if pd.notna(row['original_price']) and row['original_price'] > row['selling_price']:
+            price_line += f"  ~~${row['original_price']:.2f}~~  🔖 On Sale!"
 
-def has_more_results(session_id, filtered_total):
-    if session_id not in session_memory:
-        return False
-    page = session_memory[session_id].get("page", 1)
-    return (page * 3) < filtered_total
+        entry = f"{i}) {row['name']}\n   {price_line}"
 
+        if pd.notna(row['average_rating']):
+            entry += (f"\n   ⭐ {row['average_rating']:.1f}/5"
+                      f"  ({int(row['reviews_count'])} reviews)")
+        if row['color']:
+            entry += f"\n   🎨 {row['color']}"
 
-def append_more_prompt(reply, session_id, filtered_total):
-    if has_more_results(session_id, filtered_total):
-        reply += "\n\n👀 Want to see more options? Just say 'show more'!"
-    else:
-        reply += "\n\n✅ That's all the results for this search."
-    return reply
+        entry += f"\n   🏷️ {row['category']}  |  {row['breadcrumbs']}"
+        lines.append(entry)
 
-
-def detect_yes_intent(query_text):
-    query_text = query_text.lower().strip()
-    yes_phrases = [
-        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "show more",
-        "more", "next", "continue", "go on", "show me more", "see more",
-        "please", "yes please", "of course", "why not"
-    ]
-    return any(phrase == query_text or query_text.startswith(phrase) for phrase in yes_phrases)
-
-
-def detect_no_intent(query_text):
-    query_text = query_text.lower().strip()
-    no_phrases = [
-        "no", "nope", "nah", "no thanks", "no thank you", "that's enough",
-        "stop", "done", "enough", "i'm good", "im good", "no more"
-    ]
-    return any(phrase == query_text or query_text.startswith(phrase) for phrase in no_phrases)
-
-
-def get_summary_label(category, color, usage):
-    parts = []
-    if usage:
-        parts.append(usage)
-    if color:
-        parts.append(color)
-    if category:
-        parts.append(category)
-    return " ".join(parts) if parts else "products"
+    return "👟 Adidas Products for You ✨\n\n" + "\n\n".join(lines)
 
 
 # -------------------------------
@@ -364,78 +380,84 @@ def get_summary_label(category, color, usage):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     req = request.get_json()
-    params = req['queryResult']['parameters']
-    query_text = req['queryResult']['queryText']
-    query_lower = query_text.lower()
-
+    params     = req['queryResult']['parameters']
+    query_text = req['queryResult']['queryText'].lower()
     intent_name = req['queryResult']['intent']['displayName']
-    session_id = req['session']
+    session_id  = req['session']
 
     # --------------------------------------------------
     # LIST ALL CATEGORIES
     # --------------------------------------------------
     if intent_name == "List Categories":
-        categories = df['category'].dropna().unique()
-        reply = "🛍️ Adidas USA carries these product categories:\n\n"
-        reply += "\n".join([f"• {c}" for c in categories if c])
-        reply += "\n\nYou can also filter by gender (Men, Women, Kids), sport (Soccer, Training, Swimming), or style (Originals, Essentials)!"
+        categories = [c for c in df['category'].dropna().unique() if c]
+        reply  = "🛍️ Adidas USA carries these categories:\n\n"
+        reply += "\n".join([f"• {c}" for c in categories])
+        reply += ("\n\nYou can also filter by gender (Men / Women / Kids), "
+                  "sport (Soccer / Training / Running / Swimming), "
+                  "or style (Originals)!")
         return jsonify({"fulfillmentText": reply})
 
     # --------------------------------------------------
     # NEGATIVE INTENT — user says no to "show more?"
     # --------------------------------------------------
-    if intent_name == "Negative Intent" or detect_no_intent(query_lower):
-        if session_id in session_memory and session_memory[session_id].get("awaiting_more_confirm"):
+    if intent_name == "Negative Intent" or detect_no_intent(query_text):
+        if (session_id in session_memory
+                and session_memory[session_id].get("awaiting_more_confirm")):
             session_memory[session_id]["awaiting_more_confirm"] = False
-            mem = session_memory[session_id]
             label = get_summary_label(
-                mem.get("category", ""),
-                mem.get("color", ""),
-                mem.get("usage", "")
+                session_memory[session_id].get("preference", ""),
+                session_memory[session_id].get("product", "")
             )
-            return jsonify({
-                "fulfillmentText": f"No problem! Hope you found your perfect Adidas {label} 😊\nFeel free to search again anytime!"
-            })
+            return jsonify({"fulfillmentText":
+                f"No problem! Hope you found what you needed 😊\n"
+                f"Feel free to search for more {label} anytime!"})
 
     # --------------------------------------------------
     # SHOW MORE INTENT
     # --------------------------------------------------
-    if intent_name == "Show More" or (
+    if intent_name == "Show More Intent" or (
         session_id in session_memory
         and session_memory[session_id].get("awaiting_more_confirm")
-        and detect_yes_intent(query_lower)
+        and detect_yes_intent(query_text)
     ):
         if session_id in session_memory:
-            memory = session_memory[session_id]
-
-            category   = memory.get("category", "")
-            color      = memory.get("color", "")
-            usage      = memory.get("usage", "")
-            preference = memory.get("preference", "popular")
-            price_range = memory.get("price_range", "")
-            max_price  = memory.get("max_price", None)
-            saved_query = memory.get("query_text", "")
+            memory      = session_memory[session_id]
+            product     = memory.get("product", "")
+            preference  = memory["preference"]
+            price_range = memory["price_range"]
+            max_price   = memory["max_price"]
+            color       = memory.get("color", "")
+            usage       = memory.get("usage", "")
+            # Use the saved query_text from the original search for consistent filtering
+            saved_query_text = memory.get("query_text", "")
             page = memory.get("page", 1) + 1
 
-            filtered = apply_filters(df, category, color, usage, price_range, max_price, saved_query)
+            filtered = apply_filters(df, product, price_range, max_price,
+                                     saved_query_text, color, usage)
 
             if filtered.empty:
-                return jsonify({"fulfillmentText": "😢 No more results found. Try a different search!"})
+                return jsonify({"fulfillmentText":
+                    "No more results 😢 (filter returned empty)"})
 
             filtered = apply_sorting(filtered, preference)
-            start = (page - 1) * 3
-            results = filtered.iloc[start:start + 3]
+            start    = (page - 1) * 3
+            results  = filtered.iloc[start:start + 3]
 
             if results.empty:
-                return jsonify({"fulfillmentText": "😢 No more results.\n\nTry a different search to discover more Adidas products! 🔍"})
+                return jsonify({"fulfillmentText":
+                    "No more results 😢\n\n"
+                    "Try a different search to discover more products! 🔍"})
 
             session_memory[session_id]["page"] = page
             session_memory[session_id]["awaiting_more_confirm"] = False
             save_last_shown_price(session_id, results)
 
-            reply = format_reply(results, category)
+            reply = format_reply(results, product)
             reply = append_more_prompt(reply, session_id, len(filtered))
-            session_memory[session_id]["awaiting_more_confirm"] = has_more_results(session_id, len(filtered))
+
+            # Flag that we're waiting for user to confirm they want the next page
+            session_memory[session_id]["awaiting_more_confirm"] = \
+                has_more_results(session_id, len(filtered))
 
             return jsonify({"fulfillmentText": reply})
 
@@ -443,46 +465,39 @@ def webhook():
             return jsonify({"fulfillmentText": "Please search for something first 😊"})
 
     # --------------------------------------------------
-    # PRODUCT SEARCH (main intent)
+    # PRODUCT SEARCH
     # --------------------------------------------------
+    product     = params.get('product') or ""
+    price_range = params.get('price_range') or ""
+    preference  = normalize_preference(params.get('preference'))
+    max_price   = params.get('max_price')
+    color       = params.get('color') or ""
+    usage       = params.get('usage') or ""
 
-    # --- Extract parameters from Dialogflow entities ---
-    category    = params.get('products') or ""       # @products entity
-    color       = params.get('color') or ""           # @color entity
-    usage       = params.get('usage') or ""           # @usage entity
-    brand       = params.get('brand') or ""           # @brand entity (always adidas here)
-    price_range = params.get('price_range') or ""     # @price_range entity
-    max_price   = params.get('max_price') or None     # @max_price entity
-    preference  = normalize_preference(params.get('preference'))  # @preference entity
+    # Normalise Dialogflow list params
+    if isinstance(product, list):     product     = product[0]     if product     else ""
+    if isinstance(color, list):       color       = color[0]       if color       else ""
+    if isinstance(usage, list):       usage       = usage[0]       if usage       else ""
+    if isinstance(price_range, list): price_range = price_range[0] if price_range else ""
 
-    # --- Normalize list params from Dialogflow ---
-    if isinstance(category, list):
-        category = category[0] if category else ""
-    if isinstance(color, list):
-        color = color[0] if color else ""
-    if isinstance(usage, list):
-        usage = usage[0] if usage else ""
-    if isinstance(price_range, list):
-        price_range = price_range[0] if price_range else ""
-
-    # --- Force override preference from query text ---
-    if any(w in query_lower for w in ["cheap", "cheapest", "lowest price", "budget", "affordable"]):
+    # FORCE override preference from query text
+    if any(w in query_text for w in ["cheap", "cheapest", "lowest price", "budget"]):
         preference = "cheap"
-    elif any(w in query_lower for w in ["expensive", "most expensive", "premium", "luxury"]):
+    elif any(w in query_text for w in ["expensive", "most expensive", "highest price", "premium"]):
         preference = "expensive"
-    elif any(w in query_lower for w in ["best rated", "top rated", "highest rated"]):
-        preference = "high rating"
-    elif any(w in query_lower for w in ["on sale", "discount", "deal"]):
-        preference = "discount"
 
-    # --- Smart detection from raw query text ---
-    detected_category = detect_category(query_lower)
-    detected_color    = detect_color(query_lower)
-    detected_usage    = detect_usage(query_lower)
-    extracted_price   = extract_max_price(query_lower)
+    # Smart extraction from text
+    detected_product = detect_product(query_text)
+    detected_color   = detect_color(query_text)
+    detected_usage   = detect_usage(query_text)
+    extracted_price  = extract_max_price(query_text)
 
-    if detected_category and not category:
-        category = detected_category
+    if detected_product:
+        product = detected_product
+    elif not product and session_id in session_memory:
+        # Carry over the product from previous search if user didn't specify a new one
+        product = session_memory[session_id].get("product", "")
+
     if detected_color and not color:
         color = detected_color
     if detected_usage and not usage:
@@ -490,23 +505,20 @@ def webhook():
     if extracted_price:
         max_price = extracted_price
 
-    # --- Carry over context from previous session if not re-specified ---
-    if not category and session_id in session_memory:
-        category = session_memory[session_id].get("category", "")
-    if not color and session_id in session_memory:
-        color = session_memory[session_id].get("color", "")
-    if not usage and session_id in session_memory:
-        usage = session_memory[session_id].get("usage", "")
-
-    # --- Relative price shift ("more expensive" / "cheaper") ---
-    relative_shift = detect_relative_price_shift(query_lower)
+    # --- Relative price shift: "more expensive" / "cheaper" ---
+    # Kicks in when no absolute price override was found in the query,
+    # and there is a previous result to anchor from.
+    relative_shift = detect_relative_price_shift(query_text)
     price_anchor   = get_price_anchor(session_id)
 
-    # --- Apply filters ---
-    filtered = apply_filters(df, category, color, usage, price_range, max_price, query_lower)
+    filtered = apply_filters(df, product, price_range, max_price,
+                             query_text, color, usage)
 
     if relative_shift and price_anchor and not extracted_price:
+        # Apply relative filter on top of existing category/preference filters
         filtered = apply_relative_price_filter(filtered, relative_shift, price_anchor)
+        # Sort direction matches user intent: pricier options start from just above anchor;
+        # cheaper options start from just below anchor
         if relative_shift == "higher":
             filtered = filtered.sort_values(by='selling_price', ascending=True)
         elif relative_shift == "lower":
@@ -514,33 +526,34 @@ def webhook():
     else:
         filtered = apply_sorting(filtered, preference)
 
-    # --- Show all vs paginated ---
-    if "all" in query_lower or intent_name == "Show All":
+    # SHOW ALL support
+    if "all" in query_text or intent_name == "Show All":
         results = filtered
     else:
         results = filtered.head(3)
 
-    reply = format_reply(results, category)
+    reply = format_reply(results, product)
 
-    # --- Save session context ---
+    # SAVE CONTEXT — includes query_text so Show More replays the exact same search
     session_memory[session_id] = {
-        "category":    category,
-        "color":       color,
-        "usage":       usage,
+        "product":     product,
         "preference":  preference,
         "price_range": price_range,
         "max_price":   max_price,
-        "query_text":  query_lower,
+        "color":       color,
+        "usage":       usage,
+        "query_text":  query_text,
         "page":        1,
         "awaiting_more_confirm": False
     }
 
     save_last_shown_price(session_id, results)
 
-    # --- Append "show more?" nudge ---
-    if "all" not in query_lower and intent_name != "Show All" and not results.empty:
+    # Append 'want more?' nudge only when showing a partial list (not show-all)
+    if "all" not in query_text and intent_name != "Show All" and not results.empty:
         reply = append_more_prompt(reply, session_id, len(filtered))
-        session_memory[session_id]["awaiting_more_confirm"] = has_more_results(session_id, len(filtered))
+        session_memory[session_id]["awaiting_more_confirm"] = \
+            has_more_results(session_id, len(filtered))
 
     return jsonify({"fulfillmentText": reply})
 

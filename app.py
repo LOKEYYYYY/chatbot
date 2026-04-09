@@ -1,206 +1,233 @@
 from flask import Flask, request, jsonify
 import pandas as pd
-import re
-import os
 
 app = Flask(__name__)
 
-# -------------------------------
+# ==============================
 # LOAD DATASET
-# -------------------------------
-df = pd.read_csv("adidas_usa.csv")
-df = df[df['selling_price'].notna()].copy()
+# ==============================
+def load_dataset():
+    df = pd.read_csv("adidas_usa.csv")
 
-df['selling_price']  = df['selling_price'].astype(float)
-df['original_price'] = pd.to_numeric(df['original_price'], errors='coerce')
-df['average_rating'] = pd.to_numeric(df['average_rating'], errors='coerce')
-df['reviews_count']  = pd.to_numeric(df['reviews_count'], errors='coerce').fillna(0).astype(int)
-df['availability']   = df['availability'].fillna('Unknown')
-df['color']          = df['color'].fillna('')
-df['category']       = df['category'].fillna('')
-df['breadcrumbs']    = df['breadcrumbs'].fillna('')
-df['description']    = df['description'].fillna('')
+    # Normalize text columns
+    for col in ['name', 'category', 'color', 'description']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.lower()
 
-session_memory = {}
+    # Ensure numeric price
+    if "selling_price" in df.columns:
+        df["selling_price"] = pd.to_numeric(df["selling_price"], errors="coerce")
 
-# -------------------------------
-# HELPER FUNCTIONS
-# -------------------------------
+    return df
 
-def normalize_preference(pref):
-    if isinstance(pref, list):
-        pref = pref[0] if pref else None
-    if not pref:
-        return "popular"
-
-    pref = pref.lower().strip()
-
-    if pref in ["cheap", "budget", "lowest"]:
-        return "cheap"
-    if pref in ["expensive", "premium"]:
-        return "expensive"
-    if pref in ["discount", "sale"]:
-        return "discount"
-
-    return "popular"
+df = load_dataset()
 
 
-def detect_product(query):
-    query = query.lower()
+# ==============================
+# EXTRACT INTENT + PARAMETERS
+# ==============================
+def extract_intent_data(req):
+    intent = req['queryResult']['intent']['displayName']
+    params = req['queryResult'].get('parameters', {})
+    user_text = req['queryResult'].get("queryText", "").lower()
 
-    if any(w in query for w in ["shoe", "sneaker", "boot", "trainer"]):
-        return "Shoes"
-    if any(w in query for w in ["shirt", "hoodie", "jacket", "pants"]):
-        return "Clothing"
-    if any(w in query for w in ["bag", "cap", "sock", "hat"]):
-        return "Accessories"
-
-    return ""
+    return intent, params, user_text
 
 
-def detect_color(query):
-    colors = ["black","white","blue","red","green","grey","gray","pink","yellow"]
-    for c in colors:
-        if c in query:
-            return "Grey" if c == "gray" else c.capitalize()
-    return ""
-
-
-def detect_usage(query):
+# ==============================
+# SMART KEYWORD DETECTION
+# ==============================
+def extract_keywords(text):
     usage_map = {
-        "Men": ["men", "mens"],
-        "Women": ["women", "womens"],
-        "Kids": ["kids", "children"],
-        "Running": ["running"],
-        "Training": ["gym", "training"],
-        "Soccer": ["football", "soccer"]
+        "running": ["running", "jogging"],
+        "hiking": ["hiking", "trekking", "outdoor"],
+        "casual": ["casual", "daily", "everyday"],
+        "training": ["gym", "training", "workout"]
     }
 
-    for u, words in usage_map.items():
-        if any(w in query for w in words):
-            return u
-    return ""
+    keywords = []
+
+    for key, values in usage_map.items():
+        if any(v in text for v in values):
+            keywords.append(key)
+
+    return keywords
 
 
-def extract_max_price(query):
-    match = re.search(r"(under|below|less than)\s*(\d+)", query)
-    return float(match.group(2)) if match else None
+# ==============================
+# SCORING SYSTEM (CORE AI LOGIC)
+# ==============================
+def compute_score(row, params, user_text):
+    score = 0
+
+    # CATEGORY MATCH
+    if params.get("category"):
+        if params["category"].lower() in str(row.get("category", "")):
+            score += 3
+
+    # COLOR MATCH
+    if params.get("color"):
+        if params["color"].lower() in str(row.get("color", "")):
+            score += 2
+
+    # PRICE MATCH (closer = better)
+    if params.get("price"):
+        try:
+            target_price = float(params["price"])
+            actual_price = row.get("selling_price", 0)
+
+            if pd.notna(actual_price):
+                diff = abs(actual_price - target_price)
+                score += max(0, 3 - diff / 100)
+        except:
+            pass
+
+    # DESCRIPTION / KEYWORD MATCH
+    keywords = extract_keywords(user_text)
+
+    description = str(row.get("description", ""))
+
+    for k in keywords:
+        if k in description:
+            score += 4
+
+    # NAME MATCH (bonus)
+    if any(word in str(row.get("name", "")) for word in user_text.split()):
+        score += 2
+
+    return score
 
 
-# 🔥 CLEAN FILTER FUNCTION
-def apply_filters(df, product, price_range, max_price, query, color, usage):
-    filtered = df.copy()
+# ==============================
+# FILTER + RANK PRODUCTS
+# ==============================
+def filter_and_rank_products(df, params, user_text):
+    working_df = df.copy()
 
-    # In stock only
-    filtered = filtered[filtered['availability'] == "InStock"]
+    # Compute score
+    working_df["score"] = working_df.apply(
+        lambda row: compute_score(row, params, user_text), axis=1
+    )
 
-    # Category
-    if product:
-        temp = filtered[filtered['category'].str.contains(product, case=False, na=False)]
-        if not temp.empty:
-            filtered = temp
+    # Keep relevant results
+    working_df = working_df[working_df["score"] > 1]
 
-    # Color
-    if color:
-        temp = filtered[filtered['color'].str.contains(color, case=False, na=False)]
-        if not temp.empty:
-            filtered = temp
+    # Sort best first
+    working_df = working_df.sort_values(by="score", ascending=False)
 
-    # Usage (breadcrumbs + description)
-    if usage:
-        temp = filtered[filtered['breadcrumbs'].str.contains(usage, case=False, na=False)]
-        if temp.empty:
-            temp = filtered[filtered['description'].str.contains(usage, case=False, na=False)]
-        if not temp.empty:
-            filtered = temp
+    # Fallback if empty
+    if working_df.empty:
+        working_df = df.sample(min(5, len(df)))
 
-    # Price
-    if price_range == "cheap":
-        filtered = filtered[filtered['selling_price'] <= 35]
-    elif price_range == "expensive":
-        filtered = filtered[filtered['selling_price'] > 80]
-
-    if max_price:
-        filtered = filtered[filtered['selling_price'] <= max_price]
-
-    # 🔥 SAFE keyword search (name + description)
-    stopwords = {"i","need","want","show","find","for","with","under","adidas"}
-
-    for word in query.split():
-        if len(word) > 3 and word not in stopwords:
-            temp = filtered[
-                filtered['name'].str.contains(word, case=False, na=False) |
-                filtered['description'].str.contains(word, case=False, na=False)
-            ]
-            if not temp.empty:
-                filtered = temp
-
-    return filtered
+    return working_df.head(5)
 
 
-def apply_sorting(df, preference):
-    if preference == "cheap":
-        return df.sort_values(by='selling_price')
-    if preference == "expensive":
-        return df.sort_values(by='selling_price', ascending=False)
-    return df.sort_values(by='reviews_count', ascending=False)
+# ==============================
+# FORMAT RICH RESPONSE (CARDS)
+# ==============================
+def format_rich_response(products):
+    messages = []
+
+    for _, row in products.iterrows():
+        name = str(row.get("name", "Product")).title()
+        price = row.get("selling_price", "N/A")
+        image = row.get("image", "")  # MUST exist in dataset
+        link = row.get("source", "")  # product URL
+
+        card = {
+            "card": {
+                "title": name,
+                "subtitle": f"💰 RM{price}",
+                "imageUri": image,
+                "buttons": [
+                    {
+                        "text": "View Product",
+                        "postback": link
+                    }
+                ]
+            }
+        }
+
+        messages.append(card)
+
+    return messages
 
 
-def format_reply(results):
-    if results.empty:
-        return "😢 No products found. Try another search!"
+# ==============================
+# TEXT RESPONSE (FALLBACK)
+# ==============================
+def format_text_response(products):
+    if products.empty:
+        return "😕 Sorry, I couldn’t find anything."
 
-    lines = []
-    for i, (_, row) in enumerate(results.iterrows(), 1):
-        lines.append(
-            f"{i}) {row['name']}\n"
-            f"   💰 ${row['selling_price']:.2f}\n"
-            f"   ⭐ {row['average_rating']} ({row['reviews_count']})\n"
-            f"   🏷️ {row['category']}"
-        )
+    reply = "🔥 Here are some recommendations:\n\n"
 
-    return "👟 Products:\n\n" + "\n\n".join(lines)
+    for _, row in products.iterrows():
+        reply += f"👟 {row.get('name', '').title()}\n"
+        reply += f"💰 RM{row.get('selling_price', 'N/A')}\n\n"
+
+    return reply
 
 
-# -------------------------------
-# WEBHOOK
-# -------------------------------
-
-@app.route('/webhook', methods=['POST'])
+# ==============================
+# WEBHOOK MAIN
+# ==============================
+@app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json()
 
-    params = req['queryResult']['parameters']
-    query  = req['queryResult']['queryText'].lower()
-    session_id = req['session']
+    intent, params, user_text = extract_intent_data(req)
 
-    product     = params.get('product') or ""
-    price_range = params.get('price_range') or ""
-    preference  = normalize_preference(params.get('preference'))
-    max_price   = params.get('max_price')
-    color       = params.get('color') or ""
-    usage       = params.get('usage') or ""
+    # ==========================
+    # PRODUCT SEARCH INTENT
+    # ==========================
+    if intent == "Product Search":
+        products = filter_and_rank_products(df, params, user_text)
 
-    # Smart detection
-    product = detect_product(query) or product
-    color   = detect_color(query) or color
-    usage   = detect_usage(query) or usage
-    max_price = extract_max_price(query) or max_price
+        return jsonify({
+            "fulfillmentMessages": format_rich_response(products)
+        })
 
-    filtered = apply_filters(df, product, price_range, max_price, query, color, usage)
-    filtered = apply_sorting(filtered, preference)
+    # ==========================
+    # LIST CATEGORIES
+    # ==========================
+    elif intent == "List Categories":
+        categories = df['category'].dropna().unique()
 
-    results = filtered.head(3)
+        reply = "🛍️ Available categories:\n\n"
+        reply += "\n".join([f"• {c.title()}" for c in categories])
 
-    # Save memory
-    session_memory[session_id] = {
-        "product": product,
-        "query": query,
-        "page": 1
-    }
+        return jsonify({
+            "fulfillmentText": reply
+        })
 
-    return jsonify({"fulfillmentText": format_reply(results)})
+    # ==========================
+    # FALLBACK
+    # ==========================
+    elif intent == "Default Fallback Intent":
+        return jsonify({
+            "fulfillmentText": "🤖 Try something like: 'running shoes under RM300'"
+        })
+
+    # ==========================
+    # DEFAULT
+    # ==========================
+    else:
+        return jsonify({
+            "fulfillmentText": "🤖 How can I help you today?"
+        })
 
 
+# ==============================
+# HEALTH CHECK
+# ==============================
+@app.route("/", methods=["GET"])
+def home():
+    return "🚀 Chatbot backend running"
+
+
+# ==============================
+# RUN SERVER
+# ==============================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000)

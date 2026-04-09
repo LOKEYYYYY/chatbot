@@ -179,6 +179,11 @@ def apply_filters(df, category, color, usage, price_range, max_price, query_text
         usage_filtered = filtered[filtered['breadcrumbs'].str.contains(usage, case=False, na=False)]
         if not usage_filtered.empty:
             filtered = usage_filtered
+        else:
+            # Fallback: search usage keyword in description text
+            desc_filtered = filtered[filtered['description'].str.contains(usage, case=False, na=False)]
+            if not desc_filtered.empty:
+                filtered = desc_filtered
 
     # Price range filter
     if price_range == "cheap":
@@ -270,19 +275,35 @@ def format_reply(results, category=""):
     return "👟 Adidas Products for You ✨\n\n" + "\n\n".join(lines)
 
 
-def format_no_results_reply(category=""):
+def suggest_related_categories(product):
+    """
+    Suggests related categories when a search returns no results,
+    giving the user a smarter fallback than a generic list.
+    """
     related_map = {
         "Shoes":       ["Clothing", "Accessories"],
         "Clothing":    ["Shoes", "Accessories"],
         "Accessories": ["Shoes", "Clothing"]
     }
-    related = related_map.get(category, ["Shoes", "Clothing", "Accessories"])
-    reply = f"😢 No results found"
-    if category:
-        reply += f" for *{category}*"
-    reply += ".\n\nYou might also like:\n"
-    reply += "\n".join([f"• {r}" for r in related])
-    reply += "\n\nOr try adjusting your color, price, or usage filters 🔍"
+    return related_map.get(product, [])
+
+
+def format_no_results_reply(category=""):
+    """
+    Returns a smarter no-results message that includes related category suggestions
+    when available, otherwise falls back to the top 3 available categories.
+    """
+    related = suggest_related_categories(category)
+
+    if related:
+        reply = f"😢 No results found for *{category}*.\n\nYou might also like:\n"
+        reply += "\n".join([f"• {r}" for r in related])
+        reply += "\n\nOr try adjusting your color, price, or usage filters 🔍"
+    else:
+        suggestions = df['category'].dropna().unique()[:3]
+        reply = "😢 No exact match found.\n\nTry searching for:\n"
+        reply += "\n".join([f"• {s}" for s in suggestions if s])
+
     return reply
 
 

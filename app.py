@@ -71,26 +71,15 @@ def parse_price_range(value):
 
 def format_product(row):
     name = row.get("name", "Unknown")
-    brand = row.get("brand", "")
-    color = row.get("color", "")
-    category = row.get("category", "")
     price = row.get("selling_price", None)
+    rating = row.get("average_rating", None)
+    category = row.get("category", "")
+    color = row.get("color", "")
 
-    if pd.notna(price):
-        price_text = f"${price:.0f}"
-    else:
-        price_text = "price not listed"
+    price_text = f"${price:.0f}" if pd.notna(price) else "N/A"
+    rating_text = f"⭐{rating:.1f}" if pd.notna(rating) else ""
 
-    parts = [str(name)]
-    if brand and brand != "nan":
-        parts.append(str(brand))
-    if category and category != "nan":
-        parts.append(str(category))
-    if color and color != "nan":
-        parts.append(str(color))
-    parts.append(price_text)
-
-    return " | ".join(parts)
+    return f"{name} | {category} | {color} | {price_text} {rating_text}"
 
 
 def search_products(params):
@@ -104,46 +93,25 @@ def search_products(params):
     max_price = get_param(params, "max_price")
     price_range = get_param(params, "price_range")
 
-    # Brand filter
+    # ===== FILTERS =====
     if brand and "brand" in results.columns:
         results = results[results["brand"].str.contains(str(brand), case=False, na=False)]
 
-    # Color filter
     if color and "color" in results.columns:
         results = results[results["color"].str.contains(str(color), case=False, na=False)]
 
-    # Products/category/usage filter
     for term in [products, usage]:
         if term:
             mask = pd.Series(False, index=results.index)
-            for col in ["name", "category", "description", "breadcrumbs"]:
+            for col in ["name", "category", "description"]:
                 if col in results.columns:
                     mask |= results[col].str.contains(str(term), case=False, na=False)
             results = results[mask]
 
-    # Preference filter / ranking
-    if preference:
-        pref = str(preference).lower()
-
-        if any(k in pref for k in ["popular", "top", "best seller", "bestseller"]):
-            if "reviews_count" in results.columns:
-                results = results.sort_values(["reviews_count", "average_rating"], ascending=[False, False])
-        elif any(k in pref for k in ["rated", "rating", "best"]):
-            if "average_rating" in results.columns:
-                results = results.sort_values(["average_rating", "reviews_count"], ascending=[False, False])
-        else:
-            mask = pd.Series(False, index=results.index)
-            for col in ["name", "category", "description", "breadcrumbs"]:
-                if col in results.columns:
-                    mask |= results[col].str.contains(str(preference), case=False, na=False)
-            filtered = results[mask]
-            if not filtered.empty:
-                results = filtered
-
-    # Price filtering
+    # ===== PRICE FILTER =====
     min_price, max_price_range = parse_price_range(price_range)
 
-    if max_price not in (None, ""):
+    if max_price:
         try:
             max_price_range = float(max_price)
         except:
@@ -157,6 +125,38 @@ def search_products(params):
 
         if max_price_range is not None:
             results = results[results["selling_price"] <= max_price_range]
+
+    # ===== DISCOUNT CALCULATION =====
+    if "original_price" in results.columns:
+        results["discount"] = results["original_price"] - results["selling_price"]
+    else:
+        results["discount"] = 0
+
+    # ===== SMART SORTING =====
+    if preference:
+        pref = str(preference).lower()
+
+        if "cheap" in pref:
+            results = results.sort_values("selling_price")
+
+        elif "expensive" in pref:
+            results = results.sort_values("selling_price", ascending=False)
+
+        elif "best" in pref or "rating" in pref:
+            results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
+
+        elif "popular" in pref:
+            results = results.sort_values("reviews_count", ascending=False)
+
+        elif "discount" in pref or "deal" in pref:
+            results = results.sort_values("discount", ascending=False)
+
+    else:
+        # default smart ranking
+        results = results.sort_values(
+            ["average_rating", "reviews_count"],
+            ascending=False
+        )
 
     return results.reset_index(drop=True)
 
@@ -243,7 +243,7 @@ def webhook():
         top_rows = results.head(PAGE_SIZE)
         lines = [format_product(row) for _, row in top_rows.iterrows()]
 
-        message = "Here are some products:\n" + "\n".join(f"- {line}" for line in lines)
+        message = "🔥 Top picks for you:\n" + "\n".join(f"- {line}" for line in lines)
 
         if len(results) > PAGE_SIZE:
             message += "\nSay 'show more' to see more."

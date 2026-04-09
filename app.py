@@ -30,6 +30,19 @@ INTENT_WELCOME = "Default Welcome Intent"
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
+# FIX 1: Generic/stop words that should never count as product-name keyword matches.
+# This prevents "shoes" or "hoodie" in the query from matching unrelated product names
+# word-by-word, and stops pure category words from triggering detect_products_from_text.
+GENERIC_WORDS = {
+    "shoes", "shoe", "hoodie", "hoodies", "jacket", "jackets", "shirt", "shirts",
+    "shorts", "pants", "clothing", "clothes", "wear", "apparel", "sneakers",
+    "sneaker", "boots", "boot", "sandals", "sandal", "socks", "sock",
+    "and", "or", "the", "a", "an", "for", "me", "please", "show", "find",
+    "get", "want", "need", "some", "any", "under", "below", "above", "around",
+    "with", "in", "on", "at", "of", "to", "my", "i", "like", "give",
+}
+
+
 def detect_products_from_text(query_text, df):
     if not query_text:
         return []
@@ -43,16 +56,24 @@ def detect_products_from_text(query_text, df):
     for name in df["name"].dropna().unique():
         name_lower = str(name).lower()
 
-        # Split into keywords
-        words = name_lower.split()
+        # FIX 1: Strip generic/stop words from the product name keywords before scoring.
+        # This ensures that a product like "Advantage Shoes" is not matched simply because
+        # the user said "shoes" — only meaningful brand/model words count.
+        words = [w for w in name_lower.split() if w not in GENERIC_WORDS]
 
-        # If MOST words match → consider it a hit
+        # If all words were generic, skip this product name entirely
+        if not words:
+            continue
+
+        # Require ALL meaningful (non-generic) keywords to appear in the query text
+        # so that "superstar shoes" correctly targets products containing "superstar"
         match_count = sum(1 for w in words if w in text)
 
-        if match_count >= max(1, len(words) // 2):
+        if match_count == len(words):
             matched.append(name)
 
     return list(set(matched))
+
 
 def get_param(params, *names):
     """Return the first non-empty parameter value from a list of possible names."""
@@ -222,7 +243,7 @@ def webhook():
     # Negative
     if intent_name == INTENT_NEGATIVE:
         return jsonify({
-            "fulfillmentText": "Okay — tell me another color, brand, category, or budget and I’ll search again."
+            "fulfillmentText": "Okay — tell me another color, brand, category, or budget and I'll search again."
         })
 
     # List categories
@@ -255,25 +276,38 @@ def webhook():
 
         query_text = query_result.get("queryText", "")
 
-        # STEP 3 (you already added this earlier)
         matched_products = detect_products_from_text(query_text, df)
 
         results = search_products(params)
 
-        # Ensure category relevance from user query
-        if "category" in df.columns:
-            category_terms = ["shoes", "hoodie", "shorts", "shirt", "jacket"]
+        # FIX 2: Always initialise category_mask to all-False BEFORE the column check.
+        # Previously it was only created inside the if-block, so referencing it below
+        # would raise NameError when the "category" column was absent.
+        category_mask = pd.Series(False, index=results.index)
 
-            category_mask = pd.Series(False, index=results.index)
+        # FIX 3: Extract ALL category terms mentioned in the query and combine them
+        # with OR so that "hoodie and shoes" returns both hoodies AND shoes instead
+        # of silently dropping one category.
+        # Some terms (e.g. "hoodie") live in the product *name* rather than the
+        # category column, so we search both columns for each term.
+        if "category" in df.columns or "name" in df.columns:
+            category_terms = ["shoes", "hoodie", "shorts", "shirt", "jacket"]
 
             for term in category_terms:
                 if term in query_text.lower():
-                    category_mask |= results["category"].str.contains(term, case=False, na=False)
+                    if "category" in results.columns:
+                        category_mask |= results["category"].str.contains(term, case=False, na=False)
+                    if "name" in results.columns:
+                        category_mask |= results["name"].str.contains(term, case=False, na=False)
 
         if category_mask.any():
             # Only apply if NO usage specified
             if not get_param(params, "usage"):
                 results = results[category_mask]
+
+        # FIX 4: Always initialise exact_matches to an empty DataFrame so the
+        # reference below is safe even when matched_products is empty.
+        exact_matches = pd.DataFrame()
 
         if matched_products and "name" in results.columns:
             name_mask = pd.Series(False, index=results.index)
@@ -307,28 +341,17 @@ def webhook():
         top_rows = results.head(PAGE_SIZE)
         lines = [format_product(row) for _, row in top_rows.iterrows()]
 
-        # =========================
-        # ✅ STEP 5 (prefix logic)
-        # =========================
+        # FIX 5: Consolidate the header into a single message so there is never a
+        # duplicated emoji prefix (the old code prepended message_prefix and then
+        # built a second "🎯 I found these exact products:" header inside `message`).
         if len(matched_products) > 1:
-            message_prefix = "🛒 You selected multiple products:\n"
+            message = "🛒 You selected multiple products:\n"
         elif len(matched_products) == 1:
-            message_prefix = "🎯 Product found:\n"
-        else:
-            message_prefix = ""
-
-        # =========================
-        # ✅ STEP 4 (main message)
-        # =========================
-        if matched_products:
-            message = "🎯 I found these exact products:\n"
+            message = "🎯 Product found:\n"
         else:
             message = "🔥 Top picks for you:\n"
 
         message += "\n".join(f"- {line}" for line in lines)
-
-        # combine prefix
-        message = message_prefix + message
 
         if len(results) > PAGE_SIZE:
             message += "\nSay 'show more' to see more."

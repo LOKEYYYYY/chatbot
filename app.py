@@ -221,16 +221,15 @@ def webhook():
 # ==============================
 # HEALTH CHECK
 # ==============================
+from flask import send_file
+
 @app.route("/", methods=["GET"])
 def home():
-    return "🚀 Chatbot backend running"
+    return send_file("index.html")
 
 
 # ==============================
 # RUN SERVER
 # ==============================
-import os
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Railway gives this
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000)

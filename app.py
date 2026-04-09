@@ -3,60 +3,54 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# Load CSV
+# Load dataset
 df = pd.read_csv("adidas_usa.csv")
 
-# Normalize column names
+# Clean column names
 df.columns = df.columns.str.strip().str.lower()
-print("COLUMNS:", df.columns)
 
-@app.route("/webhook", methods=["POST", "GET"])
+# Convert price to number
+df["selling_price"] = pd.to_numeric(df["selling_price"], errors="coerce")
+
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        req = request.get_json()
-        print("REQUEST:", req)
+    req = request.get_json(force=True)
 
-        intent = req["queryResult"]["intent"]["displayName"]
-        params = req["queryResult"]["parameters"]
+    # Get parameters safely
+    params = req.get("queryResult", {}).get("parameters", {})
+    color = params.get("color")
+    max_price = params.get("price")
 
-        if intent == "FindProduct":
-            color = params.get("color")
-            max_price = params.get("price")
+    results = df.copy()
 
-            results = df.copy()
+    # Filter by color
+    if color:
+        results = results[results["color"].astype(str).str.contains(color, case=False, na=False)]
 
-            # Try to find correct columns automatically
-            color_col = next((c for c in df.columns if "color" in c), None)
-            price_col = next((c for c in df.columns if "price" in c), None)
-            name_col = next((c for c in df.columns if "name" in c), None)
+    # Filter by price
+    if max_price:
+        results = results[results["selling_price"] <= float(max_price)]
 
-            if color and color_col:
-                results = results[results[color_col].astype(str).str.contains(color, case=False, na=False)]
-
-            if max_price and price_col:
-                results[price_col] = pd.to_numeric(results[price_col], errors='coerce')
-                results = results[results[price_col] <= float(max_price)]
-
-            if results.empty:
-                return jsonify({
-                    "fulfillmentText": "No products found 😢"
-                })
-
-            product = results.iloc[0]
-
-            return jsonify({
-                "fulfillmentText": f"Found {len(results)} products. Example: {product.get(name_col, 'Unknown')} - ${product.get(price_col, 'N/A')}"
-            })
-
+    # If nothing found
+    if results.empty:
         return jsonify({
-            "fulfillmentText": "Intent not matched"
+            "fulfillmentText": "No products found 😢"
         })
 
-    except Exception as e:
-        print("ERROR:", str(e))
-        return jsonify({
-            "fulfillmentText": f"Error: {str(e)}"
-        })
+    # Take top 3 products
+    top = results.head(3)
+
+    response = "Here are some products:\n"
+
+    for _, row in top.iterrows():
+        response += f"- {row['name']} (${row['selling_price']})\n"
+
+    return jsonify({
+        "fulfillmentText": response
+    })
+
+import os
 
 if __name__ == "__main__":
-    app.run(port=3000)
+    port = int(os.environ.get("PORT", 3000))
+    app.run(host="0.0.0.0", port=port)

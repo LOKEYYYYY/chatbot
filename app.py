@@ -30,6 +30,28 @@ INTENT_WELCOME = "Default Welcome Intent"
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
+def detect_products_from_text(query_text, df):
+    """
+    Detect exact product names mentioned in user input.
+    Returns list of matched product names.
+    """
+    if not query_text:
+        return []
+
+    text = query_text.lower()
+    matched = []
+
+    if "name" not in df.columns:
+        return matched
+
+    for name in df["name"].dropna().unique():
+        name_lower = str(name).lower()
+
+        # simple containment match
+        if name_lower in text:
+            matched.append(name)
+
+    return list(set(matched))
 
 def get_param(params, *names):
     """Return the first non-empty parameter value from a list of possible names."""
@@ -170,15 +192,6 @@ def webhook():
     params = query_result.get("parameters", {})
     session_id = req.get("session", "default-session")
 
-    # Welcome
-    if intent_name == INTENT_WELCOME:
-        return jsonify({
-            "fulfillmentText": (
-                "Hi! I can help you find Adidas products by brand, color, category, usage, and price. "
-                "Try saying: 'black shoes under 100' or 'show me jackets'."
-            )
-        })
-
     # Help
     if intent_name == INTENT_HELP:
         return jsonify({
@@ -227,7 +240,24 @@ def webhook():
 
     # Product search
     if intent_name == INTENT_PRODUCT_SEARCH:
+
+        query_text = query_result.get("queryText", "")
+
+        # STEP 3 (you already added this earlier)
+        matched_products = detect_products_from_text(query_text, df)
+
         results = search_products(params)
+
+        if matched_products and "name" in results.columns:
+            name_mask = pd.Series(False, index=results.index)
+
+            for product_name in matched_products:
+                name_mask |= results["name"].str.contains(product_name, case=False, na=False)
+
+            exact_matches = results[name_mask]
+
+            if not exact_matches.empty:
+                results = exact_matches.reset_index(drop=True)
 
         if results.empty:
             return jsonify({
@@ -243,7 +273,28 @@ def webhook():
         top_rows = results.head(PAGE_SIZE)
         lines = [format_product(row) for _, row in top_rows.iterrows()]
 
-        message = "🔥 Top picks for you:\n" + "\n".join(f"- {line}" for line in lines)
+        # =========================
+        # ✅ STEP 5 (prefix logic)
+        # =========================
+        if len(matched_products) > 1:
+            message_prefix = "🛒 You selected multiple products:\n"
+        elif len(matched_products) == 1:
+            message_prefix = "🎯 Product found:\n"
+        else:
+            message_prefix = ""
+
+        # =========================
+        # ✅ STEP 4 (main message)
+        # =========================
+        if matched_products:
+            message = "🎯 I found these exact products:\n"
+        else:
+            message = "🔥 Top picks for you:\n"
+
+        message += "\n".join(f"- {line}" for line in lines)
+
+        # combine prefix
+        message = message_prefix + message
 
         if len(results) > PAGE_SIZE:
             message += "\nSay 'show more' to see more."

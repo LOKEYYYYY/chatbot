@@ -31,10 +31,6 @@ PAGE_SIZE = 3
 SESSION_CACHE = {}
 
 def detect_products_from_text(query_text, df):
-    """
-    Detect exact product names mentioned in user input.
-    Returns list of matched product names.
-    """
     if not query_text:
         return []
 
@@ -47,8 +43,13 @@ def detect_products_from_text(query_text, df):
     for name in df["name"].dropna().unique():
         name_lower = str(name).lower()
 
-        # simple containment match
-        if name_lower in text:
+        # Split into keywords
+        words = name_lower.split()
+
+        # If MOST words match → consider it a hit
+        match_count = sum(1 for w in words if w in text)
+
+        if match_count >= max(1, len(words) // 2):
             matched.append(name)
 
     return list(set(matched))
@@ -247,6 +248,19 @@ def webhook():
         matched_products = detect_products_from_text(query_text, df)
 
         results = search_products(params)
+        
+        # Ensure category relevance from user query
+        if "category" in df.columns:
+            category_terms = ["shoes", "hoodie", "shorts", "shirt", "jacket"]
+
+            category_mask = pd.Series(False, index=results.index)
+
+            for term in category_terms:
+                if term in query_text.lower():
+                    category_mask |= results["category"].str.contains(term, case=False, na=False)
+
+            if category_mask.any():
+                results = results[category_mask]
 
         if matched_products and "name" in results.columns:
             name_mask = pd.Series(False, index=results.index)
@@ -256,8 +270,15 @@ def webhook():
 
             exact_matches = results[name_mask]
 
-            if not exact_matches.empty:
-                results = exact_matches.reset_index(drop=True)
+        if not exact_matches.empty:
+            # Prioritize exact matches but DO NOT discard others
+            results["priority"] = 0
+            results.loc[name_mask, "priority"] = 1
+
+            results = results.sort_values(
+                ["priority", "average_rating", "reviews_count"],
+                ascending=False
+            )
 
         if results.empty:
             return jsonify({

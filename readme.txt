@@ -4,4 +4,3 @@ pandas
 gunicorn
 
 chatbot link:
-https://lokeyyyyy.github.io/chatbot/

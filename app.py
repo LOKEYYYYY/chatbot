@@ -35,6 +35,36 @@ INTENT_GENDER_FILTER = "Gender Filter"     # user says "men" / "women" / "kids"
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
+# ===== Wishlist stored per session (in-memory) =====
+# Structure: { session_id: [ {product row dict}, ... ] }
+WISHLIST_CACHE = {}
+
+# ── Patterns for "back to results" ──
+BACK_TO_RESULTS_PATTERN = re.compile(
+    r"(?:back\s+to\s+results?|go\s+back|previous\s+results?|back)",
+    re.IGNORECASE,
+)
+
+# ── Patterns for wishlist actions ──
+WISHLIST_ADD_PATTERN = re.compile(
+    r"\b(?:save\s+(?:this|it)|add\s+to\s+(?:wishlist|favorites?|saved)|wishlist|favourite|bookmark\s+this)\b",
+    re.IGNORECASE,
+)
+WISHLIST_VIEW_PATTERN = re.compile(
+    r"\b(?:show\s+(?:my\s+)?(?:wishlist|saved|favorites?)|my\s+wishlist|saved\s+items?|view\s+wishlist)\b",
+    re.IGNORECASE,
+)
+WISHLIST_CLEAR_PATTERN = re.compile(
+    r"\b(?:clear\s+wishlist|remove\s+all|empty\s+wishlist)\b",
+    re.IGNORECASE,
+)
+
+# ── Pattern for "surprise me" ──
+SURPRISE_PATTERN = re.compile(
+    r"\b(?:surprise\s+me|random\s+pick|pick\s+(?:something|one)\s+for\s+me|recommend\s+(?:something|one)|just\s+pick\s+one)\b",
+    re.IGNORECASE,
+)
+
 # ===== Stop words: never count these as meaningful product-name tokens =====
 GENERIC_WORDS = {
     # footwear
@@ -1070,7 +1100,12 @@ def sanitize_query(query_text):
         "categories": "show all categories",
         "search again": "help",
         "show more": "show more",
-        "back to results": "show more",
+        # "back to results" intentionally NOT here — handled by BACK_TO_RESULTS_PATTERN
+        "view wishlist": "show my wishlist",
+        "clear wishlist": "clear wishlist",
+        "save this": "save this",
+        "surprise me": "surprise me",
+        "surprise me again": "surprise me",
     }
     if stripped in chip_map:
         return chip_map[stripped]
@@ -1391,6 +1426,46 @@ NONSENSE_PATTERNS = re.compile(
 )
 
 
+def rebuild_results_message(shown_products, header="🔥 Top picks for you:", has_more=False):
+    """
+    Re-renders the product list message from a list of product row dicts.
+    Used by 'Back to Results' to replay the exact same page the user was on.
+    """
+    separator = "─" * 28
+    lines = [format_product(row, index=i + 1) for i, row in enumerate(shown_products)]
+    body = f"\n{separator}\n".join(lines)
+    message = f"{header}\n\n{body}"
+    if has_more:
+        message += f"\n{separator}\n💬 Say 'show more' to see more."
+    chips = [f"View {i+1}" for i in range(len(shown_products))]
+    if has_more:
+        chips.append("Show More")
+    return message, chips
+
+
+def add_to_wishlist(session_id, product_row):
+    """Adds a product dict to the session wishlist. Avoids duplicates by name."""
+    wishlist = WISHLIST_CACHE.setdefault(session_id, [])
+    name = product_row.get("name", "")
+    if not any(p.get("name") == name for p in wishlist):
+        wishlist.append(product_row)
+        return True  # added
+    return False  # already in wishlist
+
+
+def format_wishlist(session_id):
+    """Returns a formatted string of the wishlist for display."""
+    wishlist = WISHLIST_CACHE.get(session_id, [])
+    if not wishlist:
+        return "💔 Your wishlist is empty. Browse products and tap 'Save this' to add items!", []
+    separator = "─" * 28
+    lines = [format_product(row, index=i + 1) for i, row in enumerate(wishlist)]
+    body = f"\n{separator}\n".join(lines)
+    chips = [f"View {i+1}" for i in range(len(wishlist))]
+    chips.append("Clear Wishlist")
+    return f"💖 Your Wishlist ({len(wishlist)} items):\n\n{body}", chips
+
+
 def build_response(text, quick_replies=None, cards=None):
     """
     Builds a Dialogflow Messenger-compatible fulfillmentMessages response.
@@ -1469,8 +1544,14 @@ def webhook():
             "5️⃣  Get product details\n"
             "   → After results appear, reply with the number (1, 2 or 3)\n"
             "\n"
+            "6️⃣  Save favourites\n"
+            "   → View a product, then tap 'Save this' to wishlist it\n"
+            "\n"
+            "7️⃣  Feeling lucky?\n"
+            "   → Type: surprise me\n"
+            "\n"
             "💡 Type 'help' anytime to see this guide again.",
-            quick_replies=["👩 Women", "👨 Men", "👟 Shoes", "👕 Clothing", "🎒 Accessories", "📂 Categories"]
+            quick_replies=["👩 Women", "👨 Men", "👟 Shoes", "👕 Clothing", "🎒 Accessories", "🎲 Surprise Me"]
         )
 
     # ===== HELP =====
@@ -1496,8 +1577,19 @@ def webhook():
                 "📂 Browse categories\n"
                 "   Type: show all categories\n"
                 "\n"
+                "💖 Save favourites\n"
+                "   View a product → tap 'Save this'\n"
+                "   Type: show my wishlist\n"
+                "\n"
+                "🎲 Random pick\n"
+                "   Type: surprise me\n"
+                "\n"
                 "➡️ See more results\n"
-                "   Type: show more"
+                "   Type: show more\n"
+                "\n"
+                "⬅️ Go back\n"
+                "   Type: back to results",
+                quick_replies=["🎲 Surprise Me", "💖 View Wishlist", "👟 Shoes", "👕 Clothing"]
             )
 
     # ===== GOODBYE =====
@@ -1547,6 +1639,85 @@ def webhook():
             return build_response(detail_text, cards=rich_card,
                                   quick_replies=["« Back to results", "Show More", "📂 Categories"])
         # Fall through to product search if no specific product found
+
+    # ===== WISHLIST: VIEW =====
+    if WISHLIST_VIEW_PATTERN.search(query_text):
+        wl_text, wl_chips = format_wishlist(session_id)
+        # Put wishlist items into shown_products so View 1/2/3 works on them
+        wishlist = WISHLIST_CACHE.get(session_id, [])
+        if wishlist:
+            cache = SESSION_CACHE.setdefault(session_id, {})
+            cache["shown_products"] = wishlist
+        return build_response(wl_text, quick_replies=wl_chips if wl_chips else ["👟 Shoes", "👕 Clothing"])
+
+    # ===== WISHLIST: CLEAR =====
+    if WISHLIST_CLEAR_PATTERN.search(query_text):
+        WISHLIST_CACHE[session_id] = []
+        return build_response(
+            "🗑️ Wishlist cleared! Start browsing to add new items.",
+            quick_replies=["👩 Women", "👨 Men", "👟 Shoes", "👕 Clothing"]
+        )
+
+    # ===== WISHLIST: SAVE CURRENT PRODUCT =====
+    if WISHLIST_ADD_PATTERN.search(query_text):
+        cache = SESSION_CACHE.get(session_id, {})
+        shown_products = cache.get("shown_products", [])
+        # Save the most recently viewed single product (last detail view)
+        last_viewed = cache.get("last_viewed_product")
+        target = last_viewed or (shown_products[0] if shown_products else None)
+        if target:
+            added = add_to_wishlist(session_id, target)
+            name = target.get("name", "Product")
+            msg = (
+                f"💖 Added '{name}' to your wishlist!\n"
+                f"You have {len(WISHLIST_CACHE.get(session_id, []))} item(s) saved."
+                if added else
+                f"✅ '{name}' is already in your wishlist."
+            )
+            return build_response(msg, quick_replies=["💖 View Wishlist", "Show More", "« Back to results"])
+        return build_response(
+            "😕 No product selected to save. Browse and view a product first, then say 'save this'.",
+            quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories"]
+        )
+
+    # ===== SURPRISE ME =====
+    if SURPRISE_PATTERN.search(query_text):
+        import random
+        surprise = df[df["selling_price"].notna()].copy()
+        # Filter to well-rated products only
+        surprise = surprise[surprise["average_rating"] >= 4.0] if "average_rating" in surprise.columns else surprise
+        if surprise.empty:
+            surprise = df[df["selling_price"].notna()].copy()
+        pick = surprise.sample(1).iloc[0]
+        card_text, image_url = build_product_detail_card(pick.to_dict())
+        rich_card = [{
+            "title": pick.get("name", "Product"),
+            "subtitle": f"${float(pick.get('selling_price', 0) or 0):.0f}  ⭐ {pick.get('average_rating', '')}",
+            "imageUri": image_url,
+        }] if image_url else None
+        # Store as shown so user can save/compare it
+        cache = SESSION_CACHE.setdefault(session_id, {})
+        cache["shown_products"] = [pick.to_dict()]
+        cache["last_viewed_product"] = pick.to_dict()
+        intro = "🎲 Here's a random top-rated pick for you!\n\n"
+        return build_response(
+            intro + card_text,
+            quick_replies=["🎲 Surprise Me Again", "💖 Save this", "Show More", "« Back to results"],
+            cards=rich_card
+        )
+
+    # ===== BACK TO RESULTS =====
+    if BACK_TO_RESULTS_PATTERN.search(query_text):
+        cache = SESSION_CACHE.get(session_id, {})
+        last_msg = cache.get("last_result_message")
+        last_chips = cache.get("last_result_chips")
+        shown_products = cache.get("shown_products", [])
+        if last_msg and shown_products:
+            return build_response(last_msg, quick_replies=last_chips or [])
+        return build_response(
+            "😕 No previous results to go back to. Try a new search!",
+            quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories"]
+        )
 
     # ===== SHOW MORE (check early for "show more" phrasing redirected by sanitize) =====
     if (
@@ -1598,7 +1769,10 @@ def webhook():
             if all(("No more" in l or "not found" in l.lower()) for l in all_lines):
                 return build_response("✅ No more products found for your search.")
 
-            return build_response("\n\n".join(all_lines))
+            multi_more_msg = "\n\n".join(all_lines)
+            cache["last_result_message"] = multi_more_msg
+            cache["last_result_chips"] = []  # no chips for multi-segment more
+            return build_response(multi_more_msg)
 
         # ── Single-segment show more ──
         results = search_products(params, query_text_for_more)
@@ -1666,6 +1840,10 @@ def webhook():
         body = f"\n{separator}\n".join(lines)
         message = f"📦 More results:\n\n{body}"
         chips_more = [f"View {i+1}" for i in range(len(next_chunk))]
+        # Update back-to-results snapshot to this "more" page
+        cache["last_result_message"] = message
+        cache["last_result_chips"] = chips_more
+        cache["last_result_header"] = "📦 More results:"
         return build_response(message, quick_replies=chips_more)
 
     # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
@@ -1692,12 +1870,16 @@ def webhook():
         pick_index = max(0, min(pick_index, len(shown_products) - 1))
         row = shown_products[pick_index]
         card_text, image_url = build_product_detail_card(row)
+        # Remember the last viewed product so "save this" knows what to save
+        cache = SESSION_CACHE.get(session_id, {})
+        cache["last_viewed_product"] = row
+        SESSION_CACHE[session_id] = cache
         rich_card = [{
             "title": row.get("name", "Product"),
             "subtitle": f"${float(row.get('selling_price', 0) or 0):.0f}  ⭐ {row.get('average_rating', '')}",
             "imageUri": image_url,
         }] if image_url else None
-        return build_response(card_text, quick_replies=["« Back to results", "Show More", "📂 Categories"], cards=rich_card)
+        return build_response(card_text, quick_replies=["« Back to results", "💖 Save this", "Show More", "📂 Categories"], cards=rich_card)
 
     # ===== PRODUCT SEARCH =====
     if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (
@@ -1756,17 +1938,23 @@ def webhook():
                         entry += f"\n{separator}\n💬 Say \'show more\' for more."
                     all_lines.append(entry)
 
+            multi_message = "\n\n".join(all_lines)
+            multi_chips = [f"View {i+1}" for i in range(min(len(all_shown_products), 9))]
+            multi_chips.append("Show More")
+
             SESSION_CACHE[session_id] = {
                 "shown_ids": cache_ids,
                 "last_params": params,
                 "last_query": query_text,
                 "segments": segments,
                 "shown_products": all_shown_products,
+                # ── Back-to-results snapshot ──
+                "last_result_message": multi_message,
+                "last_result_chips": multi_chips,
+                "last_result_header": "🛍️ Multi-search results:",
             }
 
-            chips = [f"View {i+1}" for i in range(min(len(all_shown_products), 9))]
-            chips.append("Show More")
-            return build_response("\n\n".join(all_lines), quick_replies=chips)
+            return build_response(multi_message, quick_replies=multi_chips)
 
         # ── SINGLE-SEGMENT SEARCH ──
         brand = get_param(params, "brand")
@@ -1878,15 +2066,6 @@ def webhook():
         top_rows = results.head(PAGE_SIZE)
         shown_products = [row.to_dict() for _, row in top_rows.iterrows()]
 
-        SESSION_CACHE[session_id] = {
-            "shown_ids": results.index.tolist()[:PAGE_SIZE],
-            "last_params": params,
-            "last_query": query_text,
-            "shown_products": shown_products,
-        }
-
-        lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top_rows.iterrows())]
-
         if len(matched_products) > 1:
             header = "🛒 Multiple products found:"
         elif len(matched_products) == 1:
@@ -1894,18 +2073,19 @@ def webhook():
         else:
             header = "🔥 Top picks for you:"
 
-        separator = "─" * 28
-        body = f"\n{separator}\n".join(lines)
-        message = f"{header}\n\n{body}"
+        has_more = len(results) > PAGE_SIZE
+        message, chips = rebuild_results_message(shown_products, header=header, has_more=has_more)
 
-        if len(results) > PAGE_SIZE:
-            message += f"\n{separator}\n💬 Say \'show more\' to see more."
-
-        # Build numbered quick-reply chips so user can tap to get product details
-        num_shown = len(top_rows)
-        chips = [f"View {i+1}" for i in range(num_shown)]
-        if len(results) > PAGE_SIZE:
-            chips.append("Show More")
+        SESSION_CACHE[session_id] = {
+            "shown_ids": results.index.tolist()[:PAGE_SIZE],
+            "last_params": params,
+            "last_query": query_text,
+            "shown_products": shown_products,
+            # ── Back-to-results snapshot ──
+            "last_result_message": message,
+            "last_result_chips": chips,
+            "last_result_header": header,
+        }
 
         return build_response(message, quick_replies=chips)
 
@@ -1925,23 +2105,23 @@ def webhook():
             return build_response(f"😕 No products found for {gender}.")
         top_rows = gender_results.head(PAGE_SIZE)
         shown_products = [row.to_dict() for _, row in top_rows.iterrows()]
+        icon = "👩" if gender == "women" else ("👨" if gender == "men" else "🧒")
+        gender_header = f"{icon} Top {gender.title()} picks:"
+        has_more_gender = len(gender_results) > PAGE_SIZE
+        gender_message, gender_chips = rebuild_results_message(
+            shown_products, header=gender_header, has_more=has_more_gender
+        )
         SESSION_CACHE[session_id] = {
             "shown_ids": gender_results.index.tolist()[:PAGE_SIZE],
             "last_params": params,
             "last_query": query_text,
             "shown_products": shown_products,
+            # ── Back-to-results snapshot ──
+            "last_result_message": gender_message,
+            "last_result_chips": gender_chips,
+            "last_result_header": gender_header,
         }
-        lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top_rows.iterrows())]
-        separator = "─" * 28
-        body = f"\n{separator}\n".join(lines)
-        icon = "👩" if gender == "women" else ("👨" if gender == "men" else "🧒")
-        message = f"{icon} Top {gender.title()} picks:\n\n{body}"
-        if len(gender_results) > PAGE_SIZE:
-            message += f"\n{separator}\n💬 Say \'show more\' to see more."
-        chips = [f"View {i+1}" for i in range(len(top_rows))]
-        if len(gender_results) > PAGE_SIZE:
-            chips.append("Show More")
-        return build_response(message, quick_replies=chips)
+        return build_response(gender_message, quick_replies=gender_chips)
 
     # ===== FALLBACK =====
     # Last-chance check: if user typed a number (even via Default Fallback),
@@ -1956,12 +2136,14 @@ def webhook():
             pick_index = max(0, min(int(fallback_num.group(1)) - 1, len(shown_products) - 1))
             row = shown_products[pick_index]
             card_text, image_url = build_product_detail_card(row)
+            cache["last_viewed_product"] = row
+            SESSION_CACHE[session_id] = cache
             rich_card = [{
                 "title": row.get("name", "Product"),
                 "subtitle": f"${float(row.get('selling_price', 0) or 0):.0f}  ⭐ {row.get('average_rating', '')}",
                 "imageUri": image_url,
             }] if image_url else None
-            return build_response(card_text, quick_replies=["« Back to results", "Show More", "📂 Categories"], cards=rich_card)
+            return build_response(card_text, quick_replies=["« Back to results", "💖 Save this", "Show More", "📂 Categories"], cards=rich_card)
 
     return build_response(
             "🤔 I didn't understand that.\n"

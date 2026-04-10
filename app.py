@@ -523,35 +523,99 @@ def compare_products(query_text):
     if product_b is None:
         return f"❌ Could not find a product matching '{term_b}'."
 
-    def safe(val, prefix="", suffix="", decimals=None):
-        if pd.isna(val) or val is None:
+    def _s(val, prefix="", suffix="", decimals=None):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
             return "N/A"
         if decimals is not None:
             return f"{prefix}{float(val):.{decimals}f}{suffix}"
         return f"{prefix}{val}{suffix}"
 
-    lines = [
-        f"📊 Comparison: {product_a.get('name', term_a)} vs {product_b.get('name', term_b)}",
-        "",
-        f"{'Attribute':<22} {'Product A':<35} {'Product B':<35}",
-        "-" * 92,
-        f"{'Name':<22} {str(product_a.get('name',''))[:34]:<35} {str(product_b.get('name',''))[:34]:<35}",
-        f"{'Category':<22} {str(product_a.get('category',''))[:34]:<35} {str(product_b.get('category',''))[:34]:<35}",
-        f"{'Color':<22} {str(product_a.get('color',''))[:34]:<35} {str(product_b.get('color',''))[:34]:<35}",
-        f"{'Selling Price':<22} {safe(product_a.get('selling_price'), '$', '', 0):<35} {safe(product_b.get('selling_price'), '$', '', 0):<35}",
-        f"{'Original Price':<22} {safe(product_a.get('original_price'), '$', '', 0):<35} {safe(product_b.get('original_price'), '$', '', 0):<35}",
-        f"{'Rating':<22} {safe(product_a.get('average_rating'), '⭐', '', 1):<35} {safe(product_b.get('average_rating'), '⭐', '', 1):<35}",
-        f"{'Reviews':<22} {safe(product_a.get('reviews_count')):<35} {safe(product_b.get('reviews_count')):<35}",
-        f"{'Availability':<22} {str(product_a.get('availability',''))[:34]:<35} {str(product_b.get('availability',''))[:34]:<35}",
-        "",
-        f"📝 {product_a.get('name', term_a)} Description:",
-        _truncate(str(product_a.get("description", "N/A")), 300),
-        "",
-        f"📝 {product_b.get('name', term_b)} Description:",
-        _truncate(str(product_b.get("description", "N/A")), 300),
-    ]
+    def _stars(rating):
+        try:
+            n = round(float(rating))
+            return "⭐" * n + "☆" * (5 - n)
+        except Exception:
+            return ""
 
-    return "\n".join(lines)
+    def _stock(avail):
+        a = str(avail).lower()
+        return "✅ In Stock" if ("in stock" in a or a in ("true","1","yes","available")) else "❌ Out of Stock"
+
+    def _discount(orig, sell):
+        try:
+            o, s = float(orig), float(sell)
+            if o > s > 0:
+                pct = int(round((o - s) / o * 100))
+                return f"🏷️ {pct}% off"
+            return ""
+        except Exception:
+            return ""
+
+    def product_card(p, label):
+        name   = p.get("name", "Unknown")
+        cat    = _s(p.get("category"))
+        color  = _s(p.get("color"))
+        price  = _s(p.get("selling_price"), "$", "", 0)
+        orig   = _s(p.get("original_price"), "$", "", 0)
+        rating = _s(p.get("average_rating"), "", "/5", 1)
+        reviews= _s(p.get("reviews_count"))
+        avail  = _stock(p.get("availability", ""))
+        disc   = _discount(p.get("original_price"), p.get("selling_price"))
+        stars  = _stars(p.get("average_rating"))
+        gender = infer_gender_from_row(p if isinstance(p, dict) else p.to_dict())
+        desc   = _truncate(str(p.get("description", "N/A")), 220)
+
+        price_line = f"💰 {price}"
+        if disc:
+            price_line += f"  {disc}  (was {orig})"
+
+        card = (
+            f"{label}\n"
+            f"👟 {name}\n"
+            f"\n"
+            f"{avail}\n"
+            f"🏷️ {cat}   🎨 {color}   👤 {gender}\n"
+            f"{price_line}\n"
+            f"{stars} {rating}  💬 {reviews} reviews\n"
+            f"\n"
+            f"📝 {desc}"
+        )
+        return card
+
+    divider = "═" * 30
+    winner_note = ""
+    try:
+        r_a = float(product_a.get("average_rating") or 0)
+        r_b = float(product_b.get("average_rating") or 0)
+        p_a = float(product_a.get("selling_price") or 0)
+        p_b = float(product_b.get("selling_price") or 0)
+        name_a = product_a.get("name", term_a)
+        name_b = product_b.get("name", term_b)
+        if r_a > r_b:
+            winner_note = f"\n🏆 Better rated: {name_a}"
+        elif r_b > r_a:
+            winner_note = f"\n🏆 Better rated: {name_b}"
+        if p_a and p_b:
+            if p_a < p_b:
+                winner_note += f"\n💸 Better value: {name_a}"
+            elif p_b < p_a:
+                winner_note += f"\n💸 Better value: {name_b}"
+    except Exception:
+        pass
+
+    card_a = product_card(product_a, "🅰️ Product A")
+    card_b = product_card(product_b, "🅱️ Product B")
+
+    result = (
+        f"📊 Comparison\n"
+        f"{divider}\n"
+        f"{card_a}\n"
+        f"{divider}\n"
+        f"{card_b}\n"
+        f"{divider}"
+        f"{winner_note}"
+    )
+    return result
 
 
 def _truncate(text, max_len=300):

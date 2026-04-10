@@ -1,110 +1,646 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Nike AI Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adidas — AI Shopping Assistant</title>
 
   <!-- Dialogflow Messenger -->
   <script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
 
-  <!-- ENTERPRISE UI FIX -->
+  <!-- Google Fonts: Barlow Condensed (display) + DM Sans (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
   <style>
-    body {
-      margin: 0;
-      font-family: 'Inter', 'Segoe UI', sans-serif;
-      background: #f3f4f6;
+    /* ─── RESET & TOKENS ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --black:   #0a0a0a;
+      --white:   #f5f5f0;
+      --accent:  #c8f35a;   /* adidas lime-neon */
+      --mid:     #1a1a1a;
+      --muted:   #888;
+      --border:  rgba(255,255,255,0.08);
+      --radius:  4px;
+      --chat-w:  380px;
+      --chat-h:  600px;
     }
 
-    /* HEADER (optional but makes it look real) */
+    html, body {
+      height: 100%;
+      background: var(--black);
+      color: var(--white);
+      font-family: 'DM Sans', sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* ─── BACKGROUND GRID ────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ─── HEADER ─────────────────────────────────────────────────── */
     .header {
-      background: #000;
-      color: white;
-      padding: 16px 24px;
-      font-size: 18px;
-      font-weight: 600;
-      letter-spacing: 1px;
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 48px;
+      height: 64px;
+      background: rgba(10,10,10,0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
     }
 
-    /* MAIN CHAT STYLING */
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Three-stripe Adidas mark */
+    .stripes {
+      display: flex;
+      gap: 3px;
+      align-items: flex-end;
+    }
+    .stripes span {
+      display: block;
+      width: 5px;
+      background: var(--white);
+      border-radius: 1px;
+    }
+    .stripes span:nth-child(1) { height: 12px; }
+    .stripes span:nth-child(2) { height: 18px; }
+    .stripes span:nth-child(3) { height: 24px; }
+
+    .brand-name {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--white);
+    }
+
+    .header-nav {
+      display: flex;
+      gap: 32px;
+    }
+    .header-nav a {
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color .2s;
+    }
+    .header-nav a:hover { color: var(--white); }
+
+    .header-badge {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--black);
+      background: var(--accent);
+      padding: 5px 12px;
+      border-radius: 2px;
+    }
+
+    /* ─── HERO ───────────────────────────────────────────────────── */
+    .hero {
+      position: relative;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 80px 48px 60px;
+      min-height: calc(100vh - 64px);
+    }
+
+    .hero-eyebrow {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .hero-eyebrow::before {
+      content: '';
+      display: block;
+      width: 28px;
+      height: 1px;
+      background: var(--accent);
+    }
+
+    .hero-headline {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: clamp(56px, 8vw, 112px);
+      font-weight: 800;
+      line-height: .92;
+      text-transform: uppercase;
+      letter-spacing: -1px;
+      color: var(--white);
+      max-width: 820px;
+      margin-bottom: 32px;
+    }
+
+    .hero-headline em {
+      font-style: normal;
+      color: var(--accent);
+      display: block;
+    }
+
+    .hero-sub {
+      font-size: 15px;
+      font-weight: 300;
+      color: var(--muted);
+      max-width: 460px;
+      line-height: 1.7;
+      margin-bottom: 48px;
+    }
+
+    /* ─── QUICK-PROMPT CHIPS ─────────────────────────────────────── */
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 60px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 18px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .5px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all .2s ease;
+      user-select: none;
+    }
+    .chip:hover {
+      background: rgba(200,243,90,0.08);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .chip-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .6;
+    }
+
+    /* ─── STATS BAR ──────────────────────────────────────────────── */
+    .stats {
+      display: flex;
+      gap: 48px;
+    }
+    .stat-item {}
+    .stat-value {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--white);
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ─── FLOATING CHAT BUBBLE OVERRIDE ─────────────────────────── */
     df-messenger {
       /* GLOBAL */
-      --df-messenger-font-family: 'Inter', sans-serif;
-      --df-messenger-font-size: 14px;
-      --df-messenger-font-color: #111;
+      --df-messenger-font-family: 'DM Sans', sans-serif;
+      --df-messenger-font-size: 13px;
+      --df-messenger-font-color: #e8e8e2;
 
-      /* CHAT WINDOW */
-      --df-messenger-chat-background: #f9fafb;
+      /* CHAT WINDOW SIZE */
+      --df-messenger-chat-window-height: var(--chat-h);
+      --df-messenger-chat-window-width: var(--chat-w);
+      --df-messenger-chat-window-offset: 20px;
+      --df-messenger-chat-window-box-shadow: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06);
+
+      /* CHAT BACKGROUND */
+      --df-messenger-chat-background: #111111;
       --df-messenger-chat-padding: 16px;
-      --df-messenger-chat-border-radius: 18px;
-
-      /* 🔥 MOST IMPORTANT (FIX MESSY UI) */
-      --df-messenger-message-spacing: 18px;
-      --df-messenger-message-stack-spacing: 12px;
-
-      /* BOT MESSAGE */
-      --df-messenger-message-bot-background: #111827;
-      --df-messenger-message-bot-font-color: #ffffff;
-      --df-messenger-message-bot-border-radius: 16px;
-
-      /* USER MESSAGE */
-      --df-messenger-message-user-background: #2563eb;
-      --df-messenger-message-user-font-color: #ffffff;
-      --df-messenger-message-user-border-radius: 16px;
+      --df-messenger-chat-border-radius: 16px;
+      --df-messenger-chat-border: 1px solid rgba(255,255,255,0.06);
 
       /* TITLE BAR */
-      --df-messenger-titlebar-background: #000;
-      --df-messenger-titlebar-font-color: #fff;
-      --df-messenger-titlebar-title-align: center;
-      --df-messenger-titlebar-title-font-size: 16px;
-      --df-messenger-titlebar-padding: 12px;
+      --df-messenger-titlebar-background: #0a0a0a;
+      --df-messenger-titlebar-font-color: #f5f5f0;
+      --df-messenger-titlebar-title-font-family: 'Barlow Condensed', sans-serif;
+      --df-messenger-titlebar-title-font-size: 17px;
+      --df-messenger-titlebar-title-font-weight: 700;
+      --df-messenger-titlebar-title-align: start;
+      --df-messenger-titlebar-padding: 14px 18px;
+      --df-messenger-titlebar-border-bottom: 1px solid rgba(255,255,255,0.06);
+      --df-messenger-titlebar-letter-spacing: 1.5px;
 
-      /* INPUT */
-      --df-messenger-input-background: #ffffff;
-      --df-messenger-input-padding: 12px;
-      --df-messenger-input-border-top: 1px solid #e5e7eb;
+      /* BOT MESSAGES */
+      --df-messenger-message-bot-background: #1c1c1c;
+      --df-messenger-message-bot-font-color: #e8e8e2;
+      --df-messenger-message-bot-border-radius: 12px;
+      --df-messenger-message-bot-border-bottom-left-radius: 3px;
+      --df-messenger-message-bot-border: 1px solid rgba(255,255,255,0.06);
+      --df-messenger-message-bot-font-weight: 300;
 
-      /* SEND BUTTON */
-      --df-messenger-send-icon-color: #2563eb;
+      /* USER MESSAGES */
+      --df-messenger-message-user-background: #c8f35a;
+      --df-messenger-message-user-font-color: #0a0a0a;
+      --df-messenger-message-user-border-radius: 12px;
+      --df-messenger-message-user-border-bottom-right-radius: 3px;
+      --df-messenger-message-user-font-weight: 500;
 
-      /* CHAT POSITION */
+      /* SPACING */
+      --df-messenger-message-spacing: 14px;
+      --df-messenger-message-stack-spacing: 6px;
+
+      /* INPUT BAR */
+      --df-messenger-input-background: #161616;
+      --df-messenger-input-padding: 12px 16px;
+      --df-messenger-input-border-top: 1px solid rgba(255,255,255,0.06);
+      --df-messenger-input-font-family: 'DM Sans', sans-serif;
+      --df-messenger-input-font-color: #e8e8e2;
+      --df-messenger-input-font-size: 13px;
+      --df-messenger-input-box-border-radius: 8px;
+      --df-messenger-input-box-padding: 10px 12px;
+
+      /* SEND ICON */
+      --df-messenger-send-icon-color: #555;
+      --df-messenger-send-icon-color-active: #c8f35a;
+      --df-messenger-send-icon-color-hover: #c8f35a;
+
+      /* FOCUS */
+      --df-messenger-focus-color: #c8f35a;
+
+      /* BUBBLE */
+      --df-messenger-chat-bubble-background: #c8f35a;
+      --df-messenger-chat-bubble-icon-color: #0a0a0a;
+      --df-messenger-chat-bubble-size: 58px;
+      --df-messenger-chat-bubble-border-radius: 58px;
+      --df-messenger-chat-bubble-border: none;
+
+      /* WRITING */
+      --df-messenger-message-bot-writing-background: #1c1c1c;
+      --df-messenger-message-bot-writing-font-color: #666;
+      --df-messenger-message-bot-writing-border: 1px solid rgba(255,255,255,0.06);
+
+      /* SCROLL */
+      --df-messenger-chat-scroll-button-enabled-display: flex;
+      --df-messenger-chat-scroll-button-background: #c8f35a;
+      --df-messenger-chat-scroll-button-font-color: #0a0a0a;
+
       position: fixed;
-      bottom: 20px;
-      right: 20px;
+      bottom: 28px;
+      right: 28px;
+      z-index: 1000;
     }
 
-    /* CHAT WINDOW SHADOW */
-    df-messenger-chat {
-      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    /* ─── CORNER DECORATION ──────────────────────────────────────── */
+    .corner-tag {
+      position: fixed;
+      bottom: 110px;
+      right: 28px;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: all .4s ease;
+    }
+    .corner-tag.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .corner-tag-text {
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(10,10,10,0.9);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 2px;
+    }
+    .corner-tag-line {
+      width: 1px;
+      height: 24px;
+      background: var(--muted);
+      margin-right: 28px;
     }
 
+    /* ─── FEATURE CARDS ──────────────────────────────────────────── */
+    .features {
+      position: relative;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-top: 1px solid var(--border);
+    }
+    .feature-card {
+      background: var(--black);
+      padding: 40px 36px;
+      transition: background .2s;
+    }
+    .feature-card:hover {
+      background: var(--mid);
+    }
+    .feature-icon {
+      font-size: 24px;
+      margin-bottom: 16px;
+      display: block;
+    }
+    .feature-title {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--white);
+      margin-bottom: 8px;
+    }
+    .feature-desc {
+      font-size: 13px;
+      font-weight: 300;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ─── FOOTER ─────────────────────────────────────────────────── */
+    .footer {
+      position: relative;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 48px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-copy {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: .5px;
+    }
+    .footer-tagline {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.2);
+    }
+
+    /* ─── PULSE ANIMATION ON BUBBLE ──────────────────────────────── */
+    @keyframes pulse-ring {
+      0%   { transform: scale(.9); box-shadow: 0 0 0 0 rgba(200,243,90,.4); }
+      70%  { transform: scale(1);  box-shadow: 0 0 0 18px rgba(200,243,90,0); }
+      100% { transform: scale(.9); box-shadow: 0 0 0 0 rgba(200,243,90,0); }
+    }
+
+    /* ─── SCROLL REVEAL ───────────────────────────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity .6s ease, transform .6s ease;
+    }
+    .reveal.shown {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ─── RESPONSIVE ─────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .header { padding: 0 20px; }
+      .header-nav { display: none; }
+      .hero { padding: 48px 20px 40px; }
+      .stats { gap: 28px; flex-wrap: wrap; }
+      .features { grid-template-columns: 1fr; }
+      .footer { padding: 16px 20px; }
+      df-messenger {
+        --df-messenger-chat-window-width: calc(100vw - 24px);
+        bottom: 16px;
+        right: 12px;
+      }
+    }
   </style>
 </head>
 
 <body>
 
-  <!-- OPTIONAL HEADER -->
-  <div class="header">NIKE AI SHOPPING ASSISTANT</div>
+  <!-- ─── HEADER ─────────────────────────────── -->
+  <header class="header">
+    <div class="header-logo">
+      <div class="stripes">
+        <span></span><span></span><span></span>
+      </div>
+      <span class="brand-name">Adidas</span>
+    </div>
 
-  <!-- CHATBOT -->
+    <nav class="header-nav">
+      <a href="#">Men</a>
+      <a href="#">Women</a>
+      <a href="#">Kids</a>
+      <a href="#">Sale</a>
+    </nav>
+
+    <div class="header-badge">AI Powered</div>
+  </header>
+
+  <!-- ─── HERO ───────────────────────────────── -->
+  <main>
+    <section class="hero">
+      <p class="hero-eyebrow reveal">AI Shopping Assistant</p>
+
+      <h1 class="hero-headline reveal" style="transition-delay:.1s">
+        Find Your
+        <em>Perfect Gear</em>
+        Instantly
+      </h1>
+
+      <p class="hero-sub reveal" style="transition-delay:.2s">
+        Describe what you're looking for in plain English — color, budget,
+        sport, style. Our assistant searches 300+ products in real time.
+      </p>
+
+      <!-- Quick-prompt chips -->
+      <div class="chips reveal" style="transition-delay:.3s" id="chips">
+        <div class="chip" data-msg="running shoes under 100">
+          <span class="chip-dot"></span> Running shoes under $100
+        </div>
+        <div class="chip" data-msg="best black shoes">
+          <span class="chip-dot"></span> Best black shoes
+        </div>
+        <div class="chip" data-msg="cheap clothing under 50">
+          <span class="chip-dot"></span> Cheap clothing under $50
+        </div>
+        <div class="chip" data-msg="compare Ultraboost and Runfalcon">
+          <span class="chip-dot"></span> Compare Ultraboost vs Runfalcon
+        </div>
+        <div class="chip" data-msg="show all categories">
+          <span class="chip-dot"></span> Show all categories
+        </div>
+        <div class="chip" data-msg="accessories under 30">
+          <span class="chip-dot"></span> Accessories under $30
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats reveal" style="transition-delay:.4s">
+        <div class="stat-item">
+          <div class="stat-value">300+</div>
+          <div class="stat-label">Products</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">3</div>
+          <div class="stat-label">Categories</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">AI</div>
+          <div class="stat-label">Powered Search</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── FEATURE CARDS ───────────────────── -->
+    <section class="features">
+      <div class="feature-card reveal">
+        <span class="feature-icon">🎯</span>
+        <div class="feature-title">Smart Filters</div>
+        <p class="feature-desc">Color, price, category, subcategory — combine any filters naturally without memorizing commands.</p>
+      </div>
+      <div class="feature-card reveal" style="transition-delay:.1s">
+        <span class="feature-icon">📊</span>
+        <div class="feature-title">Compare Products</div>
+        <p class="feature-desc">Side-by-side specs, pricing, and descriptions. Just say "compare X vs Y".</p>
+      </div>
+      <div class="feature-card reveal" style="transition-delay:.2s">
+        <span class="feature-icon">🔄</span>
+        <div class="feature-title">Pagination</div>
+        <p class="feature-desc">Never miss a product. Say "show more" to browse the next batch without repeating your query.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─── FOOTER ─────────────────────────────── -->
+  <footer class="footer">
+    <span class="footer-copy">© 2025 Adidas USA — AI Assistant Demo</span>
+    <span class="footer-tagline">Impossible is Nothing</span>
+  </footer>
+
+  <!-- ─── CORNER TOOLTIP ──────────────────────── -->
+  <div class="corner-tag" id="cornerTag">
+    <span class="corner-tag-text">Chat with AI</span>
+    <div class="corner-tag-line"></div>
+  </div>
+
+  <!-- ─── CHATBOT ─────────────────────────────── -->
   <df-messenger
     intent="WELCOME"
-    chat-title="Nike Assistant"
+    chat-title="ADIDAS ASSISTANT"
     agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
     language-code="en">
   </df-messenger>
 
-  <!-- AUTO OPEN CHAT (for demo effect) -->
   <script>
+    // ── Scroll reveal ──────────────────────────────────────────────
+    const revealEls = document.querySelectorAll('.reveal');
+    const revealObs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('shown'); });
+    }, { threshold: 0.15 });
+    revealEls.forEach(el => revealObs.observe(el));
+
+    // ── Auto open chat on load ────────────────────────────────────
     window.addEventListener('dfMessengerLoaded', function () {
       const messenger = document.querySelector('df-messenger');
-      const shadowRoot = messenger.shadowRoot;
 
+      // Show corner tooltip after delay
       setTimeout(() => {
-        const button = shadowRoot.querySelector('df-messenger-chat-bubble');
-        if (button) button.click();
-      }, 1000);
+        document.getElementById('cornerTag').classList.add('visible');
+      }, 1800);
+
+      // Auto-open
+      setTimeout(() => {
+        try {
+          const sr = messenger.shadowRoot;
+          const bubble = sr.querySelector('df-messenger-chat-bubble');
+          if (bubble) bubble.click();
+          document.getElementById('cornerTag').classList.remove('visible');
+        } catch (e) {}
+      }, 2200);
+    });
+
+    // ── Hide tooltip when chat opens ─────────────────────────────
+    document.querySelector('df-messenger').addEventListener('df-messenger-opened', () => {
+      document.getElementById('cornerTag').classList.remove('visible');
+    });
+    document.querySelector('df-messenger').addEventListener('df-messenger-closed', () => {
+      setTimeout(() => {
+        document.getElementById('cornerTag').classList.add('visible');
+      }, 600);
+    });
+
+    // ── Quick-prompt chips ────────────────────────────────────────
+    document.getElementById('chips').addEventListener('click', function (e) {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+
+      const msg = chip.dataset.msg;
+      const messenger = document.querySelector('df-messenger');
+
+      // Open chat if not already open
+      try {
+        const sr = messenger.shadowRoot;
+        const bubble = sr.querySelector('df-messenger-chat-bubble');
+        const chatEl = sr.querySelector('df-messenger-chat');
+
+        if (bubble && !chatEl) {
+          bubble.click();
+        }
+      } catch (e) {}
+
+      // Send message after brief delay (allow chat to open)
+      setTimeout(() => {
+        try {
+          messenger.renderCustomText(msg);
+        } catch (err) {
+          // Fallback: try query method
+          try { messenger.setQueryParameters({ queryText: msg }); } catch (e2) {}
+        }
+      }, 400);
     });
   </script>
-
 </body>
 </html>

@@ -110,17 +110,6 @@
     }
     .header-nav a:hover { color: var(--white); }
 
-    .header-badge {
-      font-size: 11px;
-      font-weight: 500;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--black);
-      background: var(--accent);
-      padding: 5px 12px;
-      border-radius: 2px;
-    }
-
     /* ─── HERO ───────────────────────────────────────────────────── */
     .hero {
       position: relative;
@@ -360,45 +349,6 @@
       margin-right: 28px;
     }
 
-    /* ─── FEATURE CARDS ──────────────────────────────────────────── */
-    .features {
-      position: relative;
-      z-index: 5;
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1px;
-      background: var(--border);
-      border-top: 1px solid var(--border);
-    }
-    .feature-card {
-      background: var(--black);
-      padding: 40px 36px;
-      transition: background .2s;
-    }
-    .feature-card:hover {
-      background: var(--mid);
-    }
-    .feature-icon {
-      font-size: 24px;
-      margin-bottom: 16px;
-      display: block;
-    }
-    .feature-title {
-      font-family: 'Barlow Condensed', sans-serif;
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--white);
-      margin-bottom: 8px;
-    }
-    .feature-desc {
-      font-size: 13px;
-      font-weight: 300;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-
     /* ─── FOOTER ─────────────────────────────────────────────────── */
     .footer {
       position: relative;
@@ -476,7 +426,6 @@
       <a href="#">Sale</a>
     </nav>
 
-    <div class="header-badge">AI Powered</div>
   </header>
 
   <!-- ─── HERO ───────────────────────────────── -->
@@ -533,26 +482,6 @@
         </div>
       </div>
     </section>
-
-    <!-- ─── FEATURE CARDS ───────────────────── -->
-    <section class="features">
-      <div class="feature-card reveal">
-        <span class="feature-icon">🎯</span>
-        <div class="feature-title">Smart Filters</div>
-        <p class="feature-desc">Color, price, category, subcategory — combine any filters naturally without memorizing commands.</p>
-      </div>
-      <div class="feature-card reveal" style="transition-delay:.1s">
-        <span class="feature-icon">📊</span>
-        <div class="feature-title">Compare Products</div>
-        <p class="feature-desc">Side-by-side specs, pricing, and descriptions. Just say "compare X vs Y".</p>
-      </div>
-      <div class="feature-card reveal" style="transition-delay:.2s">
-        <span class="feature-icon">🔄</span>
-        <div class="feature-title">Pagination</div>
-        <p class="feature-desc">Never miss a product. Say "show more" to browse the next batch without repeating your query.</p>
-      </div>
-    </section>
-  </main>
 
   <!-- ─── FOOTER ─────────────────────────────── -->
   <footer class="footer">

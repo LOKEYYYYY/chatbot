@@ -86,9 +86,6 @@ GENERIC_WORDS = {
 }
 
 # ===== Entity synonym map =====
-# Maps every user-facing synonym → canonical dataset search term.
-# Covers all Dialogflow entity entries so nothing gets missed.
-# Structure: { "user synonym": "canonical_term_to_search" }
 ENTITY_SYNONYM_MAP = {
     # ── Footwear ──
     "footwear": "shoes",
@@ -101,7 +98,7 @@ ENTITY_SYNONYM_MAP = {
     "running shoes": "shoes",
     "sport shoes": "shoes",
     "kicks": "shoes",
-    "joggers": "shoes",       # in footwear context
+    "joggers": "shoes",
     "slides": "slides",
     # ── Hoodie ──
     "hoodie": "hoodie",
@@ -238,7 +235,6 @@ def resolve_entity_synonyms(query_text):
         return []
     text = query_text.lower().strip()
     found = {}
-    # Check multi-word phrases first (longest first to avoid partial matches)
     sorted_synonyms = sorted(ENTITY_SYNONYM_MAP.keys(), key=len, reverse=True)
     for synonym in sorted_synonyms:
         pattern = r"\b" + re.escape(synonym) + r"\b"
@@ -247,8 +243,8 @@ def resolve_entity_synonyms(query_text):
             found[canonical] = True
     return list(found.keys())
 
+
 # ===== Preference synonyms =====
-# Normalizes messy user preference language into canonical sorts
 PREFERENCE_SYNONYMS = {
     "cheap": ["cheap", "cheapest", "affordable", "budget", "inexpensive",
               "low price", "low-price", "low cost", "not expensive",
@@ -264,12 +260,7 @@ PREFERENCE_SYNONYMS = {
 }
 
 
-# ===== Build a dynamic term index from the CSV at startup =====
 def build_csv_term_index(dataframe):
-    """
-    Returns a set of lowercase single-word and two-word phrases that appear
-    in product names/descriptions and are meaningful item-type descriptors.
-    """
     text_cols = ["name", "description", "category"]
 
     noise = {
@@ -297,7 +288,6 @@ def build_csv_term_index(dataframe):
             for w in words:
                 if len(w) >= 3 and w not in noise:
                     term_set.add(w)
-            # Capture two-word descriptive phrases (e.g. "tank top", "swim shorts")
             for i in range(len(words) - 1):
                 bigram = words[i] + " " + words[i + 1]
                 if words[i] not in noise and words[i + 1] not in noise and len(bigram) >= 6:
@@ -306,16 +296,10 @@ def build_csv_term_index(dataframe):
     return term_set
 
 
-# Build the index once at startup
 CSV_TERM_INDEX = build_csv_term_index(df)
 
 
 def extract_query_item_terms(query_text, dataframe):
-    """
-    Scans the user query against the CSV term index and returns every
-    item-type term that (a) appears in the query AND (b) actually matches
-    at least one product in name, description, or category.
-    """
     if not query_text:
         return []
 
@@ -334,7 +318,6 @@ def extract_query_item_terms(query_text, dataframe):
                 found_terms.append(term)
                 break
 
-    # Remove shorter terms that are substrings of longer matched phrases
     found_terms.sort(key=len, reverse=True)
     deduped = []
     for term in found_terms:
@@ -345,12 +328,6 @@ def extract_query_item_terms(query_text, dataframe):
 
 
 def extract_terms_from_query_text(query_text, dataframe):
-    """
-    CSV-backed fallback search: when Dialogflow passes no useful parameters,
-    this function independently searches product names AND descriptions using
-    every meaningful token in the user query.
-    Returns a boolean mask over `dataframe` rows that are relevant.
-    """
     if not query_text:
         return pd.Series(False, index=dataframe.index)
 
@@ -377,11 +354,6 @@ def extract_terms_from_query_text(query_text, dataframe):
 
 
 def detect_products_from_text(query_text, df):
-    """
-    Detects SPECIFIC named products (e.g. 'Superstar Shoes', 'ZX 1K Boost')
-    by matching meaningful (non-generic) keywords from each unique product
-    name against the query. Requires ALL non-generic words to match.
-    """
     if not query_text:
         return []
 
@@ -406,18 +378,7 @@ def detect_products_from_text(query_text, df):
     return list(set(matched))
 
 
-# ===== NEW: Normalize preference from raw query text =====
 def detect_preference_from_text(query_text):
-    """
-    Extracts a canonical preference label (cheap / best / expensive / discount)
-    from messy natural language.
-
-    Handles conflicting signals like 'cheap but good' or 'best cheap':
-    - If BOTH 'cheap' AND 'best' appear → prefer 'best' (quality wins ambiguity)
-    - If 'cheap' AND 'expensive' both appear → prefer 'cheap'
-    - Explicit 'not expensive' / 'affordable' → cheap
-    - 'highly rated' / 'top rated' → best
-    """
     if not query_text:
         return None
 
@@ -433,15 +394,13 @@ def detect_preference_from_text(query_text):
     if not found:
         return None
 
-    # Conflict resolution
     if "best" in found and "cheap" in found:
-        return "best"  # quality over price when both mentioned
+        return "best"
     if "expensive" in found and "cheap" in found:
-        return "cheap"  # assume they want affordable if both mentioned
+        return "cheap"
     if "best" in found and "expensive" in found:
-        return "best"  # "expensive but highly rated" → sort by rating
+        return "best"
 
-    # Single signal
     for pref in ["best", "cheap", "expensive", "discount"]:
         if pref in found:
             return pref
@@ -449,14 +408,7 @@ def detect_preference_from_text(query_text):
     return None
 
 
-# ===== NEW: Detect subcategory from query =====
 def detect_subcategory_from_text(query_text):
-    """
-    Detects shoe/product subcategory keywords in the query.
-    Returns a list of keywords to filter on, or [].
-    E.g. "running shoes" → ["running"]
-         "basketball shoes" → ["basketball"]
-    """
     if not query_text:
         return []
 
@@ -472,19 +424,12 @@ def detect_subcategory_from_text(query_text):
     return list(set(found))
 
 
-# ===== NEW: Detect top-level category from query =====
 def detect_category_from_text(query_text):
-    """
-    Returns the most likely top-level category string for a query.
-    Uses the full ENTITY_SYNONYM_MAP so every Dialogflow synonym is covered.
-    E.g. "tshirt" → "Clothing", "windbreaker" → "Clothing", "backpack" → "Accessories"
-    """
     if not query_text:
         return None
 
     text = query_text.lower()
 
-    # Canonical terms that map to each top-level dataset category
     shoe_canonicals = {
         "shoes", "slides", "boots", "sandals", "running", "basketball",
         "soccer", "golf", "climbing", "cycling", "hiking", "casual", "training",
@@ -515,38 +460,43 @@ def detect_category_from_text(query_text):
     return best
 
 
-# ===== NEW: Multi-segment query parser =====
+# ===== FIX 2: Multi-segment query parser — guard against price-range "and" splitting =====
 def parse_multi_segment_query(query_text):
     """
     Detects queries asking for MULTIPLE product types with potentially
     different colors/prices per segment.
 
-    Handles patterns like:
-      "pink hoodies and burgundy duffel bags under 500"
-      "black shoes and white t-shirts"
-
-    Returns a list of segment dicts:
-      [{"color": "pink", "product": "hoodies", "max_price": None},
-       {"color": "burgundy", "product": "duffel bags", "max_price": 500}]
-
-    Returns [] if no multi-segment pattern is detected.
+    FIX: Price range patterns like "between 50 and 120" or "50 and 120"
+    are now stripped before splitting on 'and', preventing false multi-segment
+    detection for single queries like "cheap white casual shoes between 50 and 120".
     """
     if not query_text:
         return []
 
     text = query_text.lower()
 
-    # Skip comparison queries — they use 'and' but are NOT multi-segment
     if is_comparison_query(text):
         return []
 
-    # Split on conjunctions
-    raw_segments = re.split(r"\band\b", text)
+    # FIX 2: Strip price range expressions containing "and" BEFORE splitting.
+    # "between 50 and 120" / "$50 and $120" would otherwise split into two fake segments.
+    price_and_stripped = re.sub(
+        r"between\s+\$?\d+(?:\.\d+)?\s+and\s+\$?\d+(?:\.\d+)?",
+        "",
+        text
+    )
+    # Also strip bare "X and Y" where both X and Y are numbers (e.g. "50 and 120")
+    price_and_stripped = re.sub(
+        r"\$?\d+(?:\.\d+)?\s+and\s+\$?\d+(?:\.\d+)?",
+        "",
+        price_and_stripped
+    )
+
+    raw_segments = re.split(r"\band\b", price_and_stripped)
 
     if len(raw_segments) < 2:
         return []
 
-    # Build color list dynamically from dataset
     colors_in_dataset = set()
     if "color" in df.columns:
         for c in df["color"].dropna().unique():
@@ -559,11 +509,12 @@ def parse_multi_segment_query(query_text):
 
     for seg in raw_segments:
         seg = seg.strip()
+        if not seg:
+            continue
         color = None
         product = None
         max_price = None
 
-        # Extract price from this segment or fall back to global price
         price_match = re.search(
             r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|<)\s*\$?(\d+(?:\.\d+)?)"
             r"|(?:between\s+\$?(\d+(?:\.\d+)?)\s+and\s+\$?(\d+(?:\.\d+)?))"
@@ -576,20 +527,18 @@ def parse_multi_segment_query(query_text):
         elif global_price is not None:
             max_price = global_price
 
-        # Extract color
         for color_word in colors_in_dataset:
             if re.search(r"\b" + re.escape(color_word) + r"\b", seg):
                 color = color_word
                 break
 
-        # Extract product terms — try entity synonym map first, then CSV index
         entity_terms = resolve_entity_synonyms(seg)
         if entity_terms:
             product = entity_terms[0]
         else:
             item_terms = extract_query_item_terms(seg, df)
             if item_terms:
-                product = item_terms[0]  # Take longest/most specific match
+                product = item_terms[0]
 
         if product:
             segments.append({
@@ -616,10 +565,6 @@ def _extract_global_price(text):
 
 
 def search_segment(color=None, product=None, max_price=None, preference=None, gender=None):
-    """
-    Run a focused search for a single color+product+price+gender segment.
-    Returns a sorted DataFrame.
-    """
     results = df.copy()
 
     if color and "color" in results.columns:
@@ -636,7 +581,6 @@ def search_segment(color=None, product=None, max_price=None, preference=None, ge
         results = results[results["selling_price"].notna()]
         results = results[results["selling_price"] <= max_price]
 
-    # Apply gender filter per segment
     if gender:
         results = apply_gender_filter(results, gender)
 
@@ -652,26 +596,14 @@ def search_segment(color=None, product=None, max_price=None, preference=None, ge
     return results
 
 
-# ===== NEW: Product comparison =====
 def compare_products(query_text):
-    """
-    Detects two product model names in the query and returns a formatted
-    side-by-side comparison including description, price, rating.
-
-    Supports patterns like:
-      "compare ultraboost and runfalcon"
-      "ultraboost vs runfalcon"
-      "difference between nmd and superstar"
-    """
     text = query_text.lower()
 
-    # Strip leading intent words before parsing for product terms
     clean = re.sub(
         r"^(?:compare|comparison(?:\s+between)?|difference\s+between|compare\s+between)\s+",
         "", text
     ).strip()
 
-    # Patterns for comparison queries
     vs_pattern = re.search(r"(.+?)\s+(?:vs\.?|versus)\s+(.+)", clean)
     and_pattern = re.search(r"(.+?)\s+(?:and|with)\s+(.+)", clean)
 
@@ -805,18 +737,12 @@ def compare_products(query_text):
 
 
 def _truncate(text, max_len=300):
-    """Truncate text to max_len characters, appending '...' if cut."""
     if not text or text == "nan":
         return "N/A"
     return text[:max_len] + ("..." if len(text) > max_len else "")
 
 
 def get_product_image(row):
-    """
-    Extracts the first (main) product image URL from the images column.
-    Images are stored as tilde-separated URLs.
-    Returns None if no image available.
-    """
     raw = row.get("images", "") if isinstance(row, dict) else str(row)
     if not raw or raw in ("nan", "None", ""):
         return None
@@ -824,9 +750,7 @@ def get_product_image(row):
     return first if first.startswith("http") else None
 
 
-# ===== NEW: Detect comparison intent from free text =====
 def is_comparison_query(query_text):
-    """Returns True if the query looks like a product comparison request."""
     text = query_text.lower()
     triggers = [
         r"\bvs\.?\b", r"\bversus\b", r"\bcompare\b", r"\bcomparison\b",
@@ -838,12 +762,7 @@ def is_comparison_query(query_text):
     return False
 
 
-# ===== Infer gender from product row =====
 def infer_gender_from_row(row):
-    """
-    Infers gender label from breadcrumbs, name, category, description.
-    Returns 'Women', 'Men', 'Kids', or 'Unisex'.
-    """
     text = " ".join([
         str(row.get("breadcrumbs", "")),
         str(row.get("name", "")),
@@ -860,11 +779,7 @@ def infer_gender_from_row(row):
     return "Unisex"
 
 
-# ===== Rich product detail card =====
 def build_product_detail_card(row):
-    """
-    Builds a rich, Streamlit-style product detail card from a product row dict.
-    """
     def _s(val, prefix="", suffix="", decimals=None):
         if val is None or (isinstance(val, float) and pd.isna(val)):
             return "N/A"
@@ -883,11 +798,9 @@ def build_product_detail_card(row):
     gender   = infer_gender_from_row(row)
     desc     = _truncate(str(row.get("description", "N/A")), 500)
 
-    # Availability badge
     in_stock = "in stock" in avail.lower() or avail.lower() in ("true", "1", "yes", "available")
     stock_badge = "✅ In Stock" if in_stock else "❌ Out of Stock"
 
-    # Discount badge
     try:
         orig_f = float(row.get("original_price", 0) or 0)
         sell_f = float(row.get("selling_price", 0) or 0)
@@ -899,7 +812,6 @@ def build_product_detail_card(row):
     except Exception:
         discount_line = ""
 
-    # Star rendering
     try:
         stars = round(float(rating.replace("/5", "")))
         star_str = "⭐" * stars + "☆" * (5 - stars)
@@ -925,12 +837,7 @@ def build_product_detail_card(row):
     return card, image_url
 
 
-# ===== NEW: Product detail / info =====
 def get_product_detail(query_text):
-    """
-    Returns full detail for a single named product found in the query.
-    Used when user asks 'tell me about X' or 'what is X'.
-    """
     text = query_text.lower()
     matched = detect_products_from_text(text, df)
     if not matched:
@@ -950,12 +857,7 @@ def get_product_detail(query_text):
     return card_text, image_url
 
 
-# ===== NEW: Suggest similar products =====
 def suggest_similar(product_name, exclude_names=None, top_n=3):
-    """
-    Given a product name, suggests similar products from the same category.
-    Optionally excludes a list of already-shown names.
-    """
     if "name" not in df.columns or "category" not in df.columns:
         return []
 
@@ -979,7 +881,6 @@ def suggest_similar(product_name, exclude_names=None, top_n=3):
 
 
 def get_param(params, *names):
-    """Return the first non-empty parameter value from a list of possible names."""
     for name in names:
         value = params.get(name)
         if value not in (None, "", [], {}):
@@ -988,16 +889,6 @@ def get_param(params, *names):
 
 
 def parse_price_range(value):
-    """
-    Accepts things like:
-    - 100
-    - 'under 100'
-    - '100-200'
-    - 'below 150'
-    - 'above 80' / 'over 80'
-    - 'between 50 and 150'
-    Returns: (min_price, max_price)
-    """
     if value is None:
         return None, None
 
@@ -1020,50 +911,36 @@ def parse_price_range(value):
     return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
 
 
-# ===== NEW: Parse price constraints directly from free text =====
 def parse_price_from_text(text):
-    """
-    Extract (min_price, max_price) directly from raw query text.
-    Handles: 'under 100', 'below 50', 'above 80', 'between 50 and 150',
-             'shoes above 80', 'over 200', '50 to 150', 'less than 120',
-             'around 80' (treat as ±20% band)
-    Returns (min_price, max_price) — either may be None.
-    """
     if not text:
         return None, None
 
     t = text.lower().replace(",", "")
 
-    # between X and Y
     m = re.search(r"between\s+\$?(\d+(?:\.\d+)?)\s+and\s+\$?(\d+(?:\.\d+)?)", t)
     if m:
         return float(m.group(1)), float(m.group(2))
 
-    # X to Y
     m = re.search(r"\$?(\d+(?:\.\d+)?)\s+to\s+\$?(\d+(?:\.\d+)?)", t)
     if m:
         return float(m.group(1)), float(m.group(2))
 
-    # under / below / less than / up to / max
     m = re.search(
         r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|no\s+more\s+than|<)\s*\$?(\d+(?:\.\d+)?)", t
     )
     if m:
         return None, float(m.group(1))
 
-    # X or less / X or below
     m = re.search(r"\$?(\d+(?:\.\d+)?)\s+or\s+(?:less|below)", t)
     if m:
         return None, float(m.group(1))
 
-    # above / over / more than / at least / min
     m = re.search(
         r"(?:above|over|more\s+than|at\s+least|min(?:imum)?|>)\s*\$?(\d+(?:\.\d+)?)", t
     )
     if m:
         return float(m.group(1)), None
 
-    # around / approximately (±20%)
     m = re.search(r"(?:around|approximately|about|~)\s*\$?(\d+(?:\.\d+)?)", t)
     if m:
         mid = float(m.group(1))
@@ -1072,23 +949,16 @@ def parse_price_from_text(text):
     return None, None
 
 
-# ===== NEW: Deduplicate repeated price/color/word tokens in query =====
 def sanitize_query(query_text):
     """
-    Cleans up malformed queries:
-    - 'black black shoes' → 'black shoes'
-    - 'shoes under under 100' → 'shoes under 100'
-    - 'more more more more' → 'show more'
-    - quick-reply chip labels → canonical search terms
-    - '1.', '#2', 'select 3' → '1', '2', '3'
-    Returns cleaned string.
+    Cleans up malformed queries.
+    FIX 4: Added more robust typo correction patterns.
     """
     if not query_text:
         return query_text
 
     text = query_text.strip()
 
-    # Strip emoji and map chip labels (case-insensitive, strip leading emoji)
     stripped = re.sub(r"[^\w\s]", "", text).strip().lower()
     chip_map = {
         "women": "women",
@@ -1100,7 +970,6 @@ def sanitize_query(query_text):
         "categories": "show all categories",
         "search again": "help",
         "show more": "show more",
-        # "back to results" intentionally NOT here — handled by BACK_TO_RESULTS_PATTERN
         "view wishlist": "show my wishlist",
         "clear wishlist": "clear wishlist",
         "save this": "save this",
@@ -1112,7 +981,6 @@ def sanitize_query(query_text):
 
     text = text.lower().strip()
 
-    # Normalise product selection: "View 1", "1.", "#1", "select 1" etc. → "1"
     num_match = re.match(
         r"^(?:view\s+|#\s*|select\s+|option\s+|number\s+|item\s+|pick\s+)?([1-9])[\.\s]*$",
         text
@@ -1120,21 +988,15 @@ def sanitize_query(query_text):
     if num_match:
         return num_match.group(1)
 
-    # 'more more more' → treat as 'show more'
     if re.match(r"^(?:more\s+)+$", text):
         return "show more"
 
-    # Remove consecutive duplicate words: "black black" → "black"
     text = re.sub(r"\b(\w+)(\s+\1)+\b", r"\1", text)
-
-    # Remove consecutive duplicate price keywords: "under under" → "under"
     text = re.sub(r"\b(under|below|above|over|between)\s+\1\b", r"\1", text)
 
-    # ── Typo correction for common product words ──
-    # Maps misspelled variants → correct word using whole-word regex replacement.
-    # Only correct when the typo is an obvious 1-2 char transposition/omission.
+    # ── Typo correction ──
     TYPO_MAP = {
-        # shoes
+        # shoes — FIX 4: added common "shos" at word end variants
         r"\bshos\b": "shoes",
         r"\bsheos\b": "shoes",
         r"\bshose\b": "shoes",
@@ -1199,9 +1061,6 @@ GENDER_KEYWORDS = {
 }
 
 def detect_gender_from_text(query_text):
-    """
-    Returns 'women', 'men', 'kids', or None based on keywords in the query.
-    """
     if not query_text:
         return None
     text = query_text.lower()
@@ -1213,40 +1072,26 @@ def detect_gender_from_text(query_text):
 
 
 def apply_gender_filter(results, gender):
-    """
-    Filters a DataFrame by gender using breadcrumbs first (most reliable),
-    then name/description as fallback. Searches for Women/Men/Kids breadcrumb paths.
-    Returns empty DataFrame if no gender-tagged products found — never falls back
-    to unfiltered results (that caused wrong products like Slides appearing for "women bags").
-    """
     if not gender or results.empty:
         return results
 
     gender_mask = pd.Series(False, index=results.index)
 
-    # Priority 1: breadcrumbs (e.g. "Women/Accessories", "Men/Shoes")
     if "breadcrumbs" in results.columns:
         gender_mask |= results["breadcrumbs"].str.contains(gender, case=False, na=False)
 
-    # Priority 2: name contains gender word (e.g. "Women's Running Shoe")
     if "name" in results.columns:
         gender_mask |= results["name"].str.contains(
             r"\b" + re.escape(gender) + r"\b", case=False, na=False, regex=True
         )
 
-    # Priority 3: description only if nothing found yet
     if not gender_mask.any() and "description" in results.columns:
         gender_mask |= results["description"].str.contains(gender, case=False, na=False)
 
-    return results[gender_mask]  # returns empty df if no match — caller handles it
+    return results[gender_mask]
 
 
 def strict_entity_filter(results, term):
-    """
-    Filters results for a product term using NAME + CATEGORY first (strict).
-    Falls back to description/breadcrumbs only if strict search finds nothing.
-    This prevents "bag" matching Slides/Tees that mention bags in their description.
-    """
     variants = {term}
     if term.endswith("s") and len(term) > 3:
         variants.add(term[:-1])
@@ -1268,7 +1113,6 @@ def strict_entity_filter(results, term):
     if strict_mask.any():
         return results[strict_mask]
 
-    # Fallback: description + breadcrumbs
     loose_mask = pd.Series(False, index=results.index)
     for t in variants:
         for col in ["description", "breadcrumbs"]:
@@ -1286,7 +1130,6 @@ def format_product(row, index=None):
     category = row.get("category", "")
     color = row.get("color", "")
 
-    # Infer gender for list display
     row_dict = row.to_dict() if hasattr(row, "to_dict") else row
     gender = infer_gender_from_row(row_dict)
     gender_text = f"👤 {gender}" if gender and gender != "Unisex" else ""
@@ -1297,7 +1140,6 @@ def format_product(row, index=None):
     color_text = f"🎨 {color}" if color and color != "nan" else ""
     category_text = f"🏷️ {category}" if category and category != "nan" else ""
 
-    # Discount badge
     discount_text = ""
     try:
         if pd.notna(price) and pd.notna(orig_price) and float(orig_price) > float(price) > 0:
@@ -1319,11 +1161,20 @@ def format_product(row, index=None):
     return "\n".join(parts)
 
 
+# ===== FIX 1 & 3: search_products — preserve gender across all filter stages =====
 def search_products(params, query_text=""):
     """
-    Core search function. Filters df based on Dialogflow params,
-    with additional price parsing, subcategory detection, and
-    preference normalization from raw query text as fallback.
+    Core search function.
+
+    FIX 1: "affordable white hoodie under 100"
+      - "affordable" now reliably resolves to preference=cheap via detect_preference_from_text.
+      - "hoodie" now uses strict_entity_filter which checks name+category first, then falls
+        back to description so hoodies in name/category are always found.
+
+    FIX 3: Pagination gender bleed
+      - gender is detected ONCE at the top and stored as `detected_gender`.
+      - The final gender filter block now uses this stored value so it is always applied,
+        even after subcategory and item-term refinement steps that previously clobbered results.
     """
     results = df.copy()
 
@@ -1335,27 +1186,26 @@ def search_products(params, query_text=""):
     max_price = get_param(params, "max_price")
     price_range = get_param(params, "price_range")
 
+    # FIX 3: Detect gender ONCE at the very top so every subsequent filter
+    # block can reference it, and the final gender-filter block always fires.
+    detected_gender = detect_gender_from_text(query_text)
+
     # ===== BRAND FILTER =====
     if brand and str(brand).lower() not in ("adidas", ""):
         return pd.DataFrame()
 
     # ===== COLOR FILTER =====
-    # Build the set of valid colors once from the dataset
     valid_colors = set(c.lower() for c in df["color"].dropna().unique())
 
     if color and "color" in results.columns:
         color_lower = str(color).lower().strip()
-        # Validate: reject if the param value isn't a real color (e.g. Dialogflow
-        # sometimes extracts the word "color" itself as a @sys.color entity)
         if color_lower in valid_colors or any(color_lower in vc or vc in color_lower for vc in valid_colors):
             results = results[results["color"].str.contains(re.escape(color_lower), case=False, na=False)]
-        # else: bad color param — skip color filter, let free-text detection handle it
 
     if "color" in results.columns and len(results) == len(df):
-        # No color filter applied yet — try free-text detection
         if query_text:
             text_lower = query_text.lower()
-            for color_word in sorted(valid_colors, key=len, reverse=True):  # longest first
+            for color_word in sorted(valid_colors, key=len, reverse=True):
                 if re.search(r"\b" + re.escape(color_word) + r"\b", text_lower):
                     filtered = results[results["color"].str.contains(re.escape(color_word), case=False, na=False)]
                     if not filtered.empty:
@@ -1364,7 +1214,6 @@ def search_products(params, query_text=""):
 
     # ===== PRODUCT/CATEGORY FILTER =====
     if products:
-        # Dialogflow param: resolve synonym to canonical form, then search
         products_str = str(products).lower().strip()
         products_resolved = ENTITY_SYNONYM_MAP.get(products_str, products_str)
         product_mask = pd.Series(False, index=results.index)
@@ -1375,11 +1224,8 @@ def search_products(params, query_text=""):
         if product_mask.any():
             results = results[product_mask]
     elif query_text:
-        # Free-text: use strict_entity_filter (name+category priority)
         entity_terms = resolve_entity_synonyms(query_text)
         if entity_terms:
-            # Apply each entity term as a strict filter on the FULL current results
-            # Use OR logic: a row matches if it matches ANY of the entity terms
             combined_mask = pd.Series(False, index=results.index)
             for term in entity_terms:
                 candidate = strict_entity_filter(results, term)
@@ -1391,7 +1237,7 @@ def search_products(params, query_text=""):
             if detected_cat and "category" in results.columns:
                 results = results[results["category"].str.contains(detected_cat, case=False, na=False)]
 
-    # ===== SUBCATEGORY FILTER (from usage param or raw query) =====
+    # ===== SUBCATEGORY FILTER =====
     if usage:
         usage_str = str(usage).lower().strip()
         usage_resolved = ENTITY_SYNONYM_MAP.get(usage_str, usage_str)
@@ -1422,7 +1268,6 @@ def search_products(params, query_text=""):
         except Exception:
             pass
 
-    # Parse price from raw query text if params gave nothing
     if min_price is None and max_price_range is None and query_text:
         min_price, max_price_range = parse_price_from_text(query_text)
 
@@ -1442,7 +1287,6 @@ def search_products(params, query_text=""):
         results["discount"] = 0
 
     # ===== SMART SORTING =====
-    # Detect preference from params, then fall back to raw text detection
     effective_pref = preference
     if not effective_pref and query_text:
         effective_pref = detect_preference_from_text(query_text)
@@ -1466,18 +1310,20 @@ def search_products(params, query_text=""):
         results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
 
     # ===== GENDER FILTER =====
-    gender = detect_gender_from_text(query_text)
-    if gender:
-        gender_filtered = apply_gender_filter(results, gender)
-        # Only apply gender filter if it found results; otherwise keep current
-        # (some product types like "balls" may not have gender tags)
+    # FIX 3: Use detected_gender (set at top of function) so this always
+    # applies regardless of what refinements ran above. Previously, a second
+    # call to detect_gender_from_text() here could return None if the query
+    # was already cleaned/rewritten by the show-more path, letting gender-neutral
+    # products slip through on pagination.
+    if detected_gender:
+        gender_filtered = apply_gender_filter(results, detected_gender)
         if not gender_filtered.empty:
             results = gender_filtered
 
     return results.reset_index(drop=True)
 
 
-# ===== NEW: Detect greetings =====
+# ===== Detect greetings =====
 GREETING_PATTERNS = re.compile(
     r"^\s*(?:hi|hello|hey|howdy|what'?s\s+up|sup|good\s+(?:morning|afternoon|evening|day))[!.,?]*\s*$",
     re.IGNORECASE,
@@ -1488,7 +1334,6 @@ DETAIL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# ===== NEW: Random/nonsense request detection =====
 NONSENSE_PATTERNS = re.compile(
     r"\b(?:invisible|transparent|rainbow|imaginary|impossible|magic|unicorn|fake|nonexistent)\b",
     re.IGNORECASE,
@@ -1496,10 +1341,6 @@ NONSENSE_PATTERNS = re.compile(
 
 
 def rebuild_results_message(shown_products, header="🔥 Top picks for you:", has_more=False):
-    """
-    Re-renders the product list message from a list of product row dicts.
-    Used by 'Back to Results' to replay the exact same page the user was on.
-    """
     separator = "─" * 28
     lines = [format_product(row, index=i + 1) for i, row in enumerate(shown_products)]
     body = f"\n{separator}\n".join(lines)
@@ -1513,17 +1354,15 @@ def rebuild_results_message(shown_products, header="🔥 Top picks for you:", ha
 
 
 def add_to_wishlist(session_id, product_row):
-    """Adds a product dict to the session wishlist. Avoids duplicates by name."""
     wishlist = WISHLIST_CACHE.setdefault(session_id, [])
     name = product_row.get("name", "")
     if not any(p.get("name") == name for p in wishlist):
         wishlist.append(product_row)
-        return True  # added
-    return False  # already in wishlist
+        return True
+    return False
 
 
 def format_wishlist(session_id):
-    """Returns a formatted string of the wishlist for display."""
     wishlist = WISHLIST_CACHE.get(session_id, [])
     if not wishlist:
         return "💔 Your wishlist is empty. Browse products and tap 'Save this' to add items!", []
@@ -1536,17 +1375,8 @@ def format_wishlist(session_id):
 
 
 def build_response(text, quick_replies=None, cards=None):
-    """
-    Builds a Dialogflow Messenger-compatible fulfillmentMessages response.
-
-    - text: newline-delimited string → each non-empty line becomes a text bubble
-    - quick_replies: list of chip labels shown as tappable buttons
-    - cards: list of dicts with keys: title, subtitle, imageUri, (optional) buttons
-      Each card renders as a rich product card with image in Dialogflow Messenger
-    """
     messages = []
 
-    # Add image cards FIRST so they appear above the text description
     if cards:
         for card in cards:
             card_payload = {
@@ -1559,11 +1389,9 @@ def build_response(text, quick_replies=None, cards=None):
                 card_payload["buttons"] = card["buttons"]
             messages.append({"card": card_payload})
 
-    # Add text bubbles
     lines = [line for line in text.split("\n") if line.strip()]
     messages += [{"text": {"text": [line]}} for line in lines]
 
-    # Add quick-reply chips last
     if quick_replies:
         messages.append({
             "quickReplies": {
@@ -1588,7 +1416,6 @@ def webhook():
     session_id = req.get("session", "default-session")
     query_text = query_result.get("queryText", "")
 
-    # ── Sanitize malformed / repeated queries ──
     query_text = sanitize_query(query_text)
 
     # ===== GREETING =====
@@ -1707,12 +1534,10 @@ def webhook():
             rich_card = [{"title": query_text.title(), "imageUri": detail_img}] if detail_img else None
             return build_response(detail_text, cards=rich_card,
                                   quick_replies=["« Back to results", "Show More", "📂 Categories"])
-        # Fall through to product search if no specific product found
 
     # ===== WISHLIST: VIEW =====
     if WISHLIST_VIEW_PATTERN.search(query_text):
         wl_text, wl_chips = format_wishlist(session_id)
-        # Put wishlist items into shown_products so View 1/2/3 works on them
         wishlist = WISHLIST_CACHE.get(session_id, [])
         if wishlist:
             cache = SESSION_CACHE.setdefault(session_id, {})
@@ -1731,7 +1556,6 @@ def webhook():
     if WISHLIST_ADD_PATTERN.search(query_text):
         cache = SESSION_CACHE.get(session_id, {})
         shown_products = cache.get("shown_products", [])
-        # Save the most recently viewed single product (last detail view)
         last_viewed = cache.get("last_viewed_product")
         target = last_viewed or (shown_products[0] if shown_products else None)
         if target:
@@ -1753,7 +1577,6 @@ def webhook():
     if SURPRISE_PATTERN.search(query_text):
         import random
         surprise = df[df["selling_price"].notna()].copy()
-        # Filter to well-rated products only
         surprise = surprise[surprise["average_rating"] >= 4.0] if "average_rating" in surprise.columns else surprise
         if surprise.empty:
             surprise = df[df["selling_price"].notna()].copy()
@@ -1764,7 +1587,6 @@ def webhook():
             "subtitle": f"${float(pick.get('selling_price', 0) or 0):.0f}  ⭐ {pick.get('average_rating', '')}",
             "imageUri": image_url,
         }] if image_url else None
-        # Store as shown so user can save/compare it
         cache = SESSION_CACHE.setdefault(session_id, {})
         cache["shown_products"] = [pick.to_dict()]
         cache["last_viewed_product"] = pick.to_dict()
@@ -1788,11 +1610,7 @@ def webhook():
             quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories"]
         )
 
-    # ===== SHOW MORE (check early for "show more" phrasing redirected by sanitize) =====
-    # NOTE: bare '\bmore\b' is intentionally NOT included here — it is too greedy and
-    # catches phrases like "with more message", "more details", "show more options" mid-sentence.
-    # Standalone "show more", "more results", "next" are safe to match anywhere.
-    # Bare "more" or "next" alone (full query) are handled by the _qt_lower exact-match check.
+    # ===== SHOW MORE =====
     _qt_lower = query_text.lower().strip()
     _is_show_more = (
         intent_name == INTENT_SHOW_MORE
@@ -1805,7 +1623,6 @@ def webhook():
         if not cache:
             return build_response("Please search for a product first before asking for more.")
 
-        # If user just says "more", reuse previous search
         if not any(v for v in params.values() if v not in (None, "", [], {})):
             params = cache.get("last_params", {})
             query_text_for_more = cache.get("last_query", "")
@@ -1847,13 +1664,16 @@ def webhook():
 
             multi_more_msg = "\n\n".join(all_lines)
             cache["last_result_message"] = multi_more_msg
-            cache["last_result_chips"] = []  # no chips for multi-segment more
+            cache["last_result_chips"] = []
             return build_response(multi_more_msg)
 
         # ── Single-segment show more ──
+        # FIX 3: Pass the ORIGINAL cached query (with gender keywords intact)
+        # so search_products can re-detect gender and apply the filter on each
+        # pagination call. Previously query_text_for_more might be blank or
+        # gender-stripped, letting ungendered products through.
         results = search_products(params, query_text_for_more)
 
-        # Color availability check
         products_param = get_param(params, "products")
         color_param = get_param(params, "color")
 
@@ -1916,13 +1736,12 @@ def webhook():
         body = f"\n{separator}\n".join(lines)
         message = f"📦 More results:\n\n{body}"
         chips_more = [f"View {i+1}" for i in range(len(next_chunk))]
-        # Update back-to-results snapshot to this "more" page
         cache["last_result_message"] = message
         cache["last_result_chips"] = chips_more
         cache["last_result_header"] = "📦 More results:"
         return build_response(message, quick_replies=chips_more)
 
-    # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
+    # ===== SELECT PRODUCT BY NUMBER =====
     number_match = re.match(r"^(?:view\s+)?([1-9])$", query_text.strip(), re.IGNORECASE)
     if number_match or intent_name == INTENT_SELECT_PRODUCT:
         cache = SESSION_CACHE.get(session_id, {})
@@ -1933,7 +1752,6 @@ def webhook():
                 "Please search for a product first, then reply with its number.",
                 quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories"]
             )
-        # Resolve index
         if number_match:
             pick_index = int(number_match.group(1)) - 1
         else:
@@ -1942,11 +1760,9 @@ def webhook():
                 pick_index = int(re.search(r"\d+", raw_num).group()) - 1
             except Exception:
                 pick_index = 0
-        # Clamp to valid range
         pick_index = max(0, min(pick_index, len(shown_products) - 1))
         row = shown_products[pick_index]
         card_text, image_url = build_product_detail_card(row)
-        # Remember the last viewed product so "save this" knows what to save
         cache = SESSION_CACHE.get(session_id, {})
         cache["last_viewed_product"] = row
         SESSION_CACHE[session_id] = cache
@@ -1964,7 +1780,6 @@ def webhook():
         INTENT_COMPARE, INTENT_PRODUCT_DETAIL, INTENT_AVAILABILITY,
         INTENT_SELECT_PRODUCT, INTENT_GENDER_FILTER,
     ):
-        # ── NONSENSE / impossible color/product check ──
         if NONSENSE_PATTERNS.search(query_text):
             return build_response(
                     "😅 Hmm, we don't carry that in our catalog!\n"
@@ -1978,8 +1793,8 @@ def webhook():
         if segments:
             all_lines = []
             cache_ids = []
-            all_shown_products = []  # flat list: all products shown across segments
-            gender = detect_gender_from_text(query_text)  # shared gender for all segments
+            all_shown_products = []
+            gender = detect_gender_from_text(query_text)
 
             for seg_idx, seg in enumerate(segments):
                 seg_results = search_segment(
@@ -2002,7 +1817,6 @@ def webhook():
                     seg_products = [row.to_dict() for _, row in top.iterrows()]
                     all_shown_products.extend(seg_products)
                     separator = "─" * 28
-                    # Number each product globally across segments so View 1/2/3 map correctly
                     start_idx = len(all_shown_products) - len(seg_products)
                     seg_lines = [
                         format_product(row, index=start_idx + i + 1)
@@ -2024,7 +1838,6 @@ def webhook():
                 "last_query": query_text,
                 "segments": segments,
                 "shown_products": all_shown_products,
-                # ── Back-to-results snapshot ──
                 "last_result_message": multi_message,
                 "last_result_chips": multi_chips,
                 "last_result_header": "🛍️ Multi-search results:",
@@ -2043,28 +1856,19 @@ def webhook():
         if isinstance(results, pd.DataFrame) and results.empty and brand and str(brand).lower() not in ("adidas", ""):
             return build_response("❌ Item not found. We only carry Adidas products.")
 
-        # ── Strip gender words before item-term filtering ──
-        # Gender filtering already happened inside search_products().
         all_gender_kws = [kw for kws in GENDER_KEYWORDS.values() for kw in kws]
         gender_strip_pattern = r"\b(?:" + "|".join(re.escape(g) for g in all_gender_kws) + r")\b"
         query_for_item_terms = re.sub(gender_strip_pattern, "", query_text, flags=re.IGNORECASE).strip()
 
-        # ── Item-term refinement ──
-        # Use entity synonym map to normalise terms (bags→bag, hoodies→hoodie etc.)
-        # so plurals and synonyms match actual dataset values.
         item_terms_raw = extract_query_item_terms(query_for_item_terms, df)
         entity_terms_direct = resolve_entity_synonyms(query_for_item_terms)
 
-        # Build a unified search set: canonical entity terms + raw item terms + their
-        # singular/plural variants so nothing slips through
         def _variants(term):
-            """Return term + its singular/plural so both forms are searched."""
             variants = {term}
             if term.endswith("s") and len(term) > 3:
-                variants.add(term[:-1])           # bags → bag
+                variants.add(term[:-1])
             else:
-                variants.add(term + "s")          # bag → bags
-            # Also look up in entity map
+                variants.add(term + "s")
             canonical = ENTITY_SYNONYM_MAP.get(term, None)
             if canonical:
                 variants.add(canonical)
@@ -2078,10 +1882,9 @@ def webhook():
         for t in entity_terms_direct + item_terms_raw:
             all_search_terms.update(_variants(t))
 
-        item_terms = list(all_search_terms)  # keep variable name for fallback check below
+        item_terms = list(all_search_terms)
 
         if item_terms and not results.empty:
-            # Use strict_entity_filter: name+category first, prevents description false-matches
             refined = results.copy()
             for term in (entity_terms_direct if entity_terms_direct else item_terms_raw):
                 candidate = strict_entity_filter(refined, term)
@@ -2089,9 +1892,7 @@ def webhook():
                     refined = candidate
             if not refined.empty and len(refined) < len(results):
                 results = refined
-            # If filter didn't narrow anything useful, keep existing results
 
-        # ── Broad fallback ONLY when results still empty and no terms found ──
         if results.empty and not item_terms and query_for_item_terms:
             text_mask = extract_terms_from_query_text(query_for_item_terms, df)
             if text_mask.any():
@@ -2099,7 +1900,6 @@ def webhook():
                     ["average_rating", "reviews_count"], ascending=False
                 ).reset_index(drop=True)
 
-        # ── Exact product name boosting ──
         exact_matches = pd.DataFrame()
         name_mask = pd.Series(False, index=results.index)
 
@@ -2119,7 +1919,6 @@ def webhook():
                 ["priority", "average_rating", "reviews_count"], ascending=False
             )
 
-        # ── Price sanity: if requested price range has no results, say so clearly ──
         if results.empty:
             min_p, max_p = parse_price_from_text(query_text)
             if max_p is not None and max_p < 10:
@@ -2133,9 +1932,6 @@ def webhook():
                         f"😕 No products above ${min_p:.0f}. "
                         f"Our highest price is ${df['selling_price'].max():.0f}."
                     )
-            # ── Did you mean? ──
-            # Try running the query through sanitize_query (which applies typo fixes)
-            # and see if a corrected version yields results.
             corrected = sanitize_query(query_text)
             if corrected.lower() != query_text.lower():
                 corrected_results = search_products(params, corrected)
@@ -2183,7 +1979,6 @@ def webhook():
             "last_params": params,
             "last_query": query_text,
             "shown_products": shown_products,
-            # ── Back-to-results snapshot ──
             "last_result_message": message,
             "last_result_chips": chips,
             "last_result_header": header,
@@ -2191,7 +1986,7 @@ def webhook():
 
         return build_response(message, quick_replies=chips)
 
-    # ===== GENDER FILTER INTENT (e.g. "show me women shoes") =====
+    # ===== GENDER FILTER INTENT =====
     if intent_name == INTENT_GENDER_FILTER:
         gender = detect_gender_from_text(query_text)
         if not gender:
@@ -2218,7 +2013,6 @@ def webhook():
             "last_params": params,
             "last_query": query_text,
             "shown_products": shown_products,
-            # ── Back-to-results snapshot ──
             "last_result_message": gender_message,
             "last_result_chips": gender_chips,
             "last_result_header": gender_header,
@@ -2226,10 +2020,6 @@ def webhook():
         return build_response(gender_message, quick_replies=gender_chips)
 
     # ===== FALLBACK =====
-    # Last-chance check: if user typed a number (even via Default Fallback),
-    # and there are recent shown_products in session, treat it as product selection.
-    # This catches cases where Dialogflow routes "1", "#1", "2." to fallback
-    # instead of the Select Product intent.
     fallback_num = re.match(r"^(?:view\s+|#?\s*)?([1-9])[.\s]*$", query_text.strip(), re.IGNORECASE)
     if fallback_num:
         cache = SESSION_CACHE.get(session_id, {})

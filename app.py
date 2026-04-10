@@ -433,9 +433,8 @@ def webhook():
             if category_mask.any():
                 results = results[category_mask]
             else:
-                fallback_mask = extract_terms_from_query_text(query_text, results)
-                if fallback_mask.any():
-                    results = results[fallback_mask]
+                # ❌ DO NOT fallback → keep empty
+                results = results.iloc[0:0]
 
         # FIX 4: Always initialise exact_matches to an empty DataFrame so the
         # reference below is safe even when matched_products is empty.
@@ -510,6 +509,40 @@ def webhook():
 
         # 🔥 Re-run search
         results = search_products(params)
+
+        # ===== COLOR AVAILABILITY CHECK =====
+        products = get_param(params, "products")
+        color = get_param(params, "color")
+
+        if products:
+            product_only = df.copy()
+
+            product_mask = pd.Series(False, index=product_only.index)
+            for col in ["name", "category", "description"]:
+                if col in product_only.columns:
+                    product_mask |= product_only[col].str.contains(str(products), case=False, na=False)
+
+            product_only = product_only[product_mask]
+
+            if not product_only.empty and color:
+                color_match = product_only[
+                    product_only["color"].str.contains(str(color), case=False, na=False)
+                ]
+
+                if color_match.empty:
+                    available_colors = (
+                        product_only["color"]
+                        .dropna()
+                        .str.lower()
+                        .unique()
+                        .tolist()
+                    )
+
+                    return jsonify({
+                        "fulfillmentText":
+                            f"Sorry, we do not have {color} {products}. "
+                            f"Available colors: {', '.join(available_colors[:6])}."
+                    })
 
         # 🔥 Apply item filtering again (important)
         item_terms = extract_query_item_terms(query_text, df)

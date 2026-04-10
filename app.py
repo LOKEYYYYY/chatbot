@@ -1130,6 +1130,64 @@ def sanitize_query(query_text):
     # Remove consecutive duplicate price keywords: "under under" → "under"
     text = re.sub(r"\b(under|below|above|over|between)\s+\1\b", r"\1", text)
 
+    # ── Typo correction for common product words ──
+    # Maps misspelled variants → correct word using whole-word regex replacement.
+    # Only correct when the typo is an obvious 1-2 char transposition/omission.
+    TYPO_MAP = {
+        # shoes
+        r"\bshos\b": "shoes",
+        r"\bsheos\b": "shoes",
+        r"\bshose\b": "shoes",
+        r"\bshes\b": "shoes",
+        r"\bshoees\b": "shoes",
+        r"\bsnaekers\b": "sneakers",
+        r"\bsnekaers\b": "sneakers",
+        r"\bsneaker\b": "sneaker",
+        # hoodie
+        r"\bhoodi\b": "hoodie",
+        r"\bhooide\b": "hoodie",
+        r"\bhoodie\b": "hoodie",
+        r"\bhoodei\b": "hoodie",
+        # jacket
+        r"\bjackt\b": "jacket",
+        r"\bjakcet\b": "jacket",
+        r"\bjacket\b": "jacket",
+        # hiking
+        r"\bhiking\b": "hiking",
+        r"\bhikng\b": "hiking",
+        r"\bhikig\b": "hiking",
+        r"\bhikking\b": "hiking",
+        # running
+        r"\brunning\b": "running",
+        r"\brunng\b": "running",
+        r"\brnning\b": "running",
+        # training
+        r"\btraning\b": "training",
+        r"\btrainig\b": "training",
+        # backpack
+        r"\bbackpak\b": "backpack",
+        r"\bbackpack\b": "backpack",
+        # clothing
+        r"\bclothing\b": "clothing",
+        r"\bclothng\b": "clothing",
+        r"\bcloting\b": "clothing",
+        # casual
+        r"\bcasual\b": "casual",
+        r"\bcasul\b": "casual",
+        r"\bcasaul\b": "casual",
+        # sandals
+        r"\bsandels\b": "sandals",
+        r"\bsandal\b": "sandal",
+        # pants
+        r"\bpants\b": "pants",
+        r"\bpant\b": "pant",
+        # shorts
+        r"\bshorts\b": "shorts",
+        r"\bshort\b": "short",
+    }
+    for pattern, replacement in TYPO_MAP.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
     return text
 
 
@@ -1222,6 +1280,7 @@ def strict_entity_filter(results, term):
 def format_product(row, index=None):
     name = row.get("name", "Unknown")
     price = row.get("selling_price", None)
+    orig_price = row.get("original_price", None)
     rating = row.get("average_rating", None)
     reviews = row.get("reviews_count", None)
     category = row.get("category", "")
@@ -1238,6 +1297,16 @@ def format_product(row, index=None):
     color_text = f"🎨 {color}" if color and color != "nan" else ""
     category_text = f"🏷️ {category}" if category and category != "nan" else ""
 
+    # Discount badge
+    discount_text = ""
+    try:
+        if pd.notna(price) and pd.notna(orig_price) and float(orig_price) > float(price) > 0:
+            pct = int(round((float(orig_price) - float(price)) / float(orig_price) * 100))
+            if pct >= 5:
+                discount_text = f"  🏷️ -{pct}%"
+    except Exception:
+        pass
+
     prefix = f"{index}. " if index is not None else ""
     parts = [f"{prefix}👟 {name}"]
     if category_text:
@@ -1246,7 +1315,7 @@ def format_product(row, index=None):
         parts.append(f"   {color_text}")
     if gender_text:
         parts.append(f"   {gender_text}")
-    parts.append(f"   💰 {price_text}  {rating_text} {reviews_text}".rstrip())
+    parts.append(f"   💰 {price_text}{discount_text}  {rating_text} {reviews_text}".rstrip())
     return "\n".join(parts)
 
 
@@ -1720,10 +1789,17 @@ def webhook():
         )
 
     # ===== SHOW MORE (check early for "show more" phrasing redirected by sanitize) =====
-    if (
+    # NOTE: bare '\bmore\b' is intentionally NOT included here — it is too greedy and
+    # catches phrases like "with more message", "more details", "show more options" mid-sentence.
+    # Standalone "show more", "more results", "next" are safe to match anywhere.
+    # Bare "more" or "next" alone (full query) are handled by the _qt_lower exact-match check.
+    _qt_lower = query_text.lower().strip()
+    _is_show_more = (
         intent_name == INTENT_SHOW_MORE
-        or re.search(r"\bshow\s+more\b|\bmore\s+results?\b|\bnext\b|\bmore\b", query_text.lower())
-    ):
+        or re.search(r"\bshow\s+more\b|\bmore\s+results?\b", _qt_lower)
+        or _qt_lower in ("more", "next", "show more")
+    )
+    if _is_show_more:
         cache = SESSION_CACHE.get(session_id)
 
         if not cache:
@@ -2057,10 +2133,36 @@ def webhook():
                         f"😕 No products above ${min_p:.0f}. "
                         f"Our highest price is ${df['selling_price'].max():.0f}."
                     )
+            # ── Did you mean? ──
+            # Try running the query through sanitize_query (which applies typo fixes)
+            # and see if a corrected version yields results.
+            corrected = sanitize_query(query_text)
+            if corrected.lower() != query_text.lower():
+                corrected_results = search_products(params, corrected)
+                if not corrected_results.empty:
+                    top_corr = corrected_results.head(PAGE_SIZE)
+                    shown_products_corr = [row.to_dict() for _, row in top_corr.iterrows()]
+                    has_more_corr = len(corrected_results) > PAGE_SIZE
+                    msg_corr, chips_corr = rebuild_results_message(
+                        shown_products_corr,
+                        header=f"🔍 Did you mean '{corrected}'? Here's what I found:",
+                        has_more=has_more_corr,
+                    )
+                    SESSION_CACHE[session_id] = {
+                        "shown_ids": corrected_results.index.tolist()[:PAGE_SIZE],
+                        "last_params": params,
+                        "last_query": corrected,
+                        "shown_products": shown_products_corr,
+                        "last_result_message": msg_corr,
+                        "last_result_chips": chips_corr,
+                        "last_result_header": f"🔍 Did you mean '{corrected}'?",
+                    }
+                    return build_response(msg_corr, quick_replies=chips_corr)
             return build_response(
                     "😕 No products found matching your request.\n"
                     "Try a different color, category, brand, or price range.\n"
-                    "Type 'show all categories' to see what's available."
+                    "Type 'show all categories' to see what's available.",
+                    quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories", "🎲 Surprise Me"]
                 )
 
         top_rows = results.head(PAGE_SIZE)

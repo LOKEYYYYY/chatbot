@@ -1122,18 +1122,67 @@ def detect_gender_from_text(query_text):
 
 def apply_gender_filter(results, gender):
     """
-    Filters a DataFrame by gender using name, description, breadcrumbs, and category columns.
+    Filters a DataFrame by gender using breadcrumbs first (most reliable),
+    then name/description as fallback. Searches for Women/Men/Kids breadcrumb paths.
+    Returns empty DataFrame if no gender-tagged products found — never falls back
+    to unfiltered results (that caused wrong products like Slides appearing for "women bags").
     """
     if not gender or results.empty:
         return results
+
     gender_mask = pd.Series(False, index=results.index)
-    search_cols = ["name", "description", "breadcrumbs", "category"]
-    for col in search_cols:
-        if col in results.columns:
-            gender_mask |= results[col].str.contains(gender, case=False, na=False)
-    filtered = results[gender_mask]
-    # Fall back to full results if gender filter wipes everything
-    return filtered if not filtered.empty else results
+
+    # Priority 1: breadcrumbs (e.g. "Women/Accessories", "Men/Shoes")
+    if "breadcrumbs" in results.columns:
+        gender_mask |= results["breadcrumbs"].str.contains(gender, case=False, na=False)
+
+    # Priority 2: name contains gender word (e.g. "Women's Running Shoe")
+    if "name" in results.columns:
+        gender_mask |= results["name"].str.contains(
+            r"\b" + re.escape(gender) + r"\b", case=False, na=False, regex=True
+        )
+
+    # Priority 3: description only if nothing found yet
+    if not gender_mask.any() and "description" in results.columns:
+        gender_mask |= results["description"].str.contains(gender, case=False, na=False)
+
+    return results[gender_mask]  # returns empty df if no match — caller handles it
+
+
+def strict_entity_filter(results, term):
+    """
+    Filters results for a product term using NAME + CATEGORY first (strict).
+    Falls back to description/breadcrumbs only if strict search finds nothing.
+    This prevents "bag" matching Slides/Tees that mention bags in their description.
+    """
+    variants = {term}
+    if term.endswith("s") and len(term) > 3:
+        variants.add(term[:-1])
+    else:
+        variants.add(term + "s")
+    canonical = ENTITY_SYNONYM_MAP.get(term, None)
+    if canonical:
+        variants.add(canonical)
+        if canonical.endswith("s") and len(canonical) > 3:
+            variants.add(canonical[:-1])
+        else:
+            variants.add(canonical + "s")
+
+    strict_mask = pd.Series(False, index=results.index)
+    for t in variants:
+        for col in ["name", "category"]:
+            if col in results.columns:
+                strict_mask |= results[col].str.contains(re.escape(t), case=False, na=False)
+    if strict_mask.any():
+        return results[strict_mask]
+
+    # Fallback: description + breadcrumbs
+    loose_mask = pd.Series(False, index=results.index)
+    for t in variants:
+        for col in ["description", "breadcrumbs"]:
+            if col in results.columns:
+                loose_mask |= results[col].str.contains(re.escape(t), case=False, na=False)
+    return results[loose_mask] if loose_mask.any() else results
 
 
 def format_product(row, index=None):
@@ -1222,18 +1271,15 @@ def search_products(params, query_text=""):
                     )
         results = results[product_mask]
     elif not products and query_text:
-        # Resolve ALL entity synonyms from raw text and filter product/category columns
+        # Resolve ALL entity synonyms from raw text and filter using strict_entity_filter
+        # (name+category first, only falls to description if nothing found)
         entity_terms = resolve_entity_synonyms(query_text)
         if entity_terms:
-            entity_mask = pd.Series(False, index=results.index)
+            entity_filtered = results.copy()
             for term in entity_terms:
-                for col in ["name", "category", "description", "breadcrumbs"]:
-                    if col in results.columns:
-                        entity_mask |= results[col].str.contains(
-                            re.escape(term), case=False, na=False
-                        )
-            if entity_mask.any():
-                results = results[entity_mask]
+                entity_filtered = strict_entity_filter(entity_filtered, term)
+            if not entity_filtered.empty:
+                results = entity_filtered
             else:
                 # Fall back to top-level category detection
                 detected_cat = detect_category_from_text(query_text)
@@ -1327,7 +1373,11 @@ def search_products(params, query_text=""):
     # ===== GENDER FILTER =====
     gender = detect_gender_from_text(query_text)
     if gender:
-        results = apply_gender_filter(results, gender)
+        gender_filtered = apply_gender_filter(results, gender)
+        # Only apply gender filter if it found results; otherwise keep current
+        # (some product types like "balls" may not have gender tags)
+        if not gender_filtered.empty:
+            results = gender_filtered
 
     return results.reset_index(drop=True)
 
@@ -1589,16 +1639,25 @@ def webhook():
                             f"Available colors: {', '.join(available_colors[:6])}."
                         )
 
-        item_terms = extract_query_item_terms(query_text_for_more, df)
+        item_terms_raw = extract_query_item_terms(query_text_for_more, df)
+        entity_terms_direct = resolve_entity_synonyms(query_text_for_more)
+        all_search_terms_more = set()
+        for t in entity_terms_direct + item_terms_raw:
+            canonical = ENTITY_SYNONYM_MAP.get(t, t)
+            all_search_terms_more.update([t, canonical,
+                t[:-1] if t.endswith("s") and len(t) > 3 else t + "s",
+                canonical[:-1] if canonical.endswith("s") and len(canonical) > 3 else canonical + "s"])
+        item_terms = list(all_search_terms_more)
         if item_terms:
             category_mask = pd.Series(False, index=results.index)
             for term in item_terms:
-                for col in ["category", "name", "description"]:
+                for col in ["category", "name", "description", "breadcrumbs"]:
                     if col in results.columns:
                         category_mask |= results[col].str.contains(
                             re.escape(term), case=False, na=False
                         )
-            results = results[category_mask]
+            if category_mask.any():
+                results = results[category_mask]
 
         shown_ids = cache.get("shown_ids", [])
         results = results[~results.index.isin(shown_ids)]
@@ -1731,27 +1790,51 @@ def webhook():
 
         # ── Strip gender words before item-term filtering ──
         # Gender filtering already happened inside search_products().
-        # Leaving gender words in the query causes extract_query_item_terms
-        # to match them against product descriptions and wrongly re-filter.
         all_gender_kws = [kw for kws in GENDER_KEYWORDS.values() for kw in kws]
         gender_strip_pattern = r"\b(?:" + "|".join(re.escape(g) for g in all_gender_kws) + r")\b"
         query_for_item_terms = re.sub(gender_strip_pattern, "", query_text, flags=re.IGNORECASE).strip()
 
         # ── Item-term category filtering ──
-        category_mask = pd.Series(False, index=results.index)
-        item_terms = extract_query_item_terms(query_for_item_terms, df)
+        # Use entity synonym map to normalise terms (bags→bag, hoodies→hoodie etc.)
+        # so plurals and synonyms match actual dataset values.
+        item_terms_raw = extract_query_item_terms(query_for_item_terms, df)
+        entity_terms_direct = resolve_entity_synonyms(query_for_item_terms)
+
+        # Build a unified search set: canonical entity terms + raw item terms + their
+        # singular/plural variants so nothing slips through
+        def _variants(term):
+            """Return term + its singular/plural so both forms are searched."""
+            variants = {term}
+            if term.endswith("s") and len(term) > 3:
+                variants.add(term[:-1])           # bags → bag
+            else:
+                variants.add(term + "s")          # bag → bags
+            # Also look up in entity map
+            canonical = ENTITY_SYNONYM_MAP.get(term, None)
+            if canonical:
+                variants.add(canonical)
+                if canonical.endswith("s"):
+                    variants.add(canonical[:-1])
+                else:
+                    variants.add(canonical + "s")
+            return variants
+
+        all_search_terms = set()
+        for t in entity_terms_direct + item_terms_raw:
+            all_search_terms.update(_variants(t))
+
+        item_terms = list(all_search_terms)  # keep variable name for fallback check below
 
         if item_terms:
-            for term in item_terms:
-                for col in ["category", "name", "description"]:
-                    if col in results.columns:
-                        category_mask |= results[col].str.contains(
-                            re.escape(term), case=False, na=False
-                        )
-            if category_mask.any():
-                results = results[category_mask]
-            else:
-                results = results.iloc[0:0]
+            # Use strict_entity_filter: name+category first, prevents description false-matches
+            refined = results.copy()
+            for term in (entity_terms_direct if entity_terms_direct else item_terms_raw):
+                candidate = strict_entity_filter(refined, term)
+                if not candidate.empty:
+                    refined = candidate
+            if not refined.empty and len(refined) < len(results):
+                results = refined
+            # If filter didn't narrow anything useful, keep existing results
 
         # ── Broad fallback ONLY when no item terms extracted ──
         if results.empty and not item_terms and query_for_item_terms:
@@ -1905,3 +1988,4 @@ def webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
+    

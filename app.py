@@ -922,6 +922,20 @@ NONSENSE_PATTERNS = re.compile(
 )
 
 
+def build_response(text):
+    """
+    Converts a newline-delimited fulfillmentText string into a proper
+    fulfillmentMessages payload so Dialogflow renders each line as a
+    separate message bubble (fixes line-spacing in Web Demo and Messenger).
+    """
+    lines = [line for line in text.split("\n") if line.strip()]
+    messages = [{"text": {"text": [line]}} for line in lines]
+    return jsonify({
+        "fulfillmentMessages": messages,
+        "fulfillmentText": text,  # kept as fallback for non-rich integrations
+    })
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(silent=True) or {}
@@ -937,19 +951,16 @@ def webhook():
 
     # ===== GREETING =====
     if GREETING_PATTERNS.match(query_text) or intent_name == INTENT_WELCOME:
-        return jsonify({
-            "fulfillmentText": (
+        return build_response(
                 "👋 Hi there! Welcome to the Adidas USA store.\n"
                 "I can help you find shoes, clothing, accessories and more.\n"
                 "Try: 'running shoes under $100', 'best rated hoodies', "
                 "'compare Ultraboost and Runfalcon', or 'show all categories'."
             )
-        })
 
     # ===== HELP =====
     if intent_name == INTENT_HELP:
-        return jsonify({
-            "fulfillmentText": (
+        return build_response(
                 "🆘 Here's what you can ask me:\n"
                 "• 'shoes under 100' — filter by category and price\n"
                 "• 'black running shoes' — filter by color and usage\n"
@@ -960,24 +971,19 @@ def webhook():
                 "• 'show more' — see next batch of results\n"
                 "• 'pink hoodies and burgundy duffel bags under 500' — multi-product search"
             )
-        })
 
     # ===== GOODBYE =====
     if intent_name == INTENT_GOODBYE:
-        return jsonify({
-            "fulfillmentText": "👋 Bye! Come back anytime if you want to search for more products."
-        })
+        return build_response("👋 Bye! Come back anytime if you want to search for more products.")
 
     # ===== NEGATIVE =====
     if intent_name == INTENT_NEGATIVE:
-        return jsonify({
-            "fulfillmentText": "Okay — tell me another color, brand, category, or budget and I'll search again."
-        })
+        return build_response("Okay — tell me another color, brand, category, or budget and I'll search again.")
 
     # ===== LIST CATEGORIES =====
     if intent_name == INTENT_LIST_CATEGORIES:
         if "category" not in df.columns:
-            return jsonify({"fulfillmentText": "I cannot find categories in the dataset."})
+            return build_response("I cannot find categories in the dataset.")
 
         categories = (
             df["category"]
@@ -993,26 +999,22 @@ def webhook():
         )
 
         if not categories:
-            return jsonify({"fulfillmentText": "No categories found in the dataset."})
+            return build_response("No categories found in the dataset.")
 
-        return jsonify({
-            "fulfillmentText": "📂 Here are some categories I found:\n- " + "\n- ".join(categories)
-        })
+        return build_response("📂 Here are some categories I found:\n- " + "\n- ".join(categories))
 
     # ===== COMPARE PRODUCTS =====
     if intent_name == INTENT_COMPARE or is_comparison_query(query_text):
         result = compare_products(query_text)
         if result:
-            return jsonify({"fulfillmentText": result})
-        return jsonify({
-            "fulfillmentText": "❌ I couldn't identify two products to compare. Try: 'compare Ultraboost and Runfalcon'."
-        })
+            return build_response(result)
+        return build_response("❌ I couldn't identify two products to compare. Try: 'compare Ultraboost and Runfalcon'.")
 
     # ===== PRODUCT DETAIL =====
     if intent_name == INTENT_PRODUCT_DETAIL or DETAIL_PATTERNS.search(query_text):
         detail = get_product_detail(query_text)
         if detail:
-            return jsonify({"fulfillmentText": detail})
+            return build_response(detail)
         # Fall through to product search if no specific product found
 
     # ===== SHOW MORE (check early for "show more" phrasing redirected by sanitize) =====
@@ -1023,9 +1025,7 @@ def webhook():
         cache = SESSION_CACHE.get(session_id)
 
         if not cache:
-            return jsonify({
-                "fulfillmentText": "Please search for a product first before asking for more."
-            })
+            return build_response("Please search for a product first before asking for more.")
 
         # If user just says "more", reuse previous search
         if not any(v for v in params.values() if v not in (None, "", [], {})):
@@ -1063,9 +1063,9 @@ def webhook():
             cache["shown_ids"] = shown_ids
 
             if all(("No more" in l or "not found" in l.lower()) for l in all_lines):
-                return jsonify({"fulfillmentText": "✅ No more products found for your search."})
+                return build_response("✅ No more products found for your search.")
 
-            return jsonify({"fulfillmentText": "\n\n".join(all_lines)})
+            return build_response("\n\n".join(all_lines))
 
         # ── Single-segment show more ──
         results = search_products(params, query_text_for_more)
@@ -1092,12 +1092,10 @@ def webhook():
                     available_colors = (
                         product_only["color"].dropna().str.lower().unique().tolist()
                     )
-                    return jsonify({
-                        "fulfillmentText": (
+                    return build_response(
                             f"😕 Sorry, we do not have {color_param} {products_param}.\n"
                             f"Available colors: {', '.join(available_colors[:6])}."
                         )
-                    })
 
         item_terms = extract_query_item_terms(query_text_for_more, df)
         if item_terms:
@@ -1115,7 +1113,7 @@ def webhook():
         next_chunk = results.head(PAGE_SIZE)
 
         if next_chunk.empty:
-            return jsonify({"fulfillmentText": "✅ No more products found. Try a new search!"})
+            return build_response("✅ No more products found. Try a new search!")
 
         cache["shown_ids"].extend(next_chunk.index.tolist())
 
@@ -1139,7 +1137,7 @@ def webhook():
             lines.append(" | ".join(parts))
 
         message = "More products:\n" + "\n".join(f"- {line}" for line in lines)
-        return jsonify({"fulfillmentText": message})
+        return build_response(message)
 
     # ===== PRODUCT SEARCH =====
     if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (
@@ -1149,13 +1147,11 @@ def webhook():
     ):
         # ── NONSENSE / impossible color/product check ──
         if NONSENSE_PATTERNS.search(query_text):
-            return jsonify({
-                "fulfillmentText": (
+            return build_response(
                     "😅 Hmm, we don't carry that in our catalog!\n"
                     "Try a real color (black, white, red...) or product type.\n"
                     "Type 'show all categories' to browse what we have."
                 )
-            })
 
         # ── MULTI-SEGMENT QUERY ──
         segments = parse_multi_segment_query(query_text)
@@ -1192,22 +1188,18 @@ def webhook():
                 "segments": segments,
             }
 
-            return jsonify({"fulfillmentText": "\n\n".join(all_lines)})
+            return build_response("\n\n".join(all_lines))
 
         # ── SINGLE-SEGMENT SEARCH ──
         brand = get_param(params, "brand")
         if brand and str(brand).lower() not in ("adidas", ""):
-            return jsonify({
-                "fulfillmentText": "❌ Item not found. We only carry Adidas products."
-            })
+            return build_response("❌ Item not found. We only carry Adidas products.")
 
         matched_products = detect_products_from_text(query_text, df)
         results = search_products(params, query_text)
 
         if isinstance(results, pd.DataFrame) and results.empty and brand and str(brand).lower() not in ("adidas", ""):
-            return jsonify({
-                "fulfillmentText": "❌ Item not found. We only carry Adidas products."
-            })
+            return build_response("❌ Item not found. We only carry Adidas products.")
 
         # ── Item-term category filtering ──
         category_mask = pd.Series(False, index=results.index)
@@ -1257,27 +1249,21 @@ def webhook():
         if results.empty:
             min_p, max_p = parse_price_from_text(query_text)
             if max_p is not None and max_p < 10:
-                return jsonify({
-                    "fulfillmentText": (
+                return build_response(
                         f"😕 No products found under ${max_p:.0f}. "
                         f"Our lowest price is ${df['selling_price'].min():.0f}. "
                         "Try a higher budget?"
                     )
-                })
             if min_p is not None and min_p > df["selling_price"].max():
-                return jsonify({
-                    "fulfillmentText": (
+                return build_response(
                         f"😕 No products above ${min_p:.0f}. "
                         f"Our highest price is ${df['selling_price'].max():.0f}."
                     )
-                })
-            return jsonify({
-                "fulfillmentText": (
+            return build_response(
                     "😕 No products found matching your request.\n"
                     "Try a different color, category, brand, or price range.\n"
                     "Type 'show all categories' to see what's available."
                 )
-            })
 
         SESSION_CACHE[session_id] = {
             "shown_ids": results.index.tolist()[:PAGE_SIZE],
@@ -1300,16 +1286,14 @@ def webhook():
         if len(results) > PAGE_SIZE:
             message += "\n\nSay 'show more' to see more."
 
-        return jsonify({"fulfillmentText": message})
+        return build_response(message)
 
     # ===== FALLBACK =====
-    return jsonify({
-        "fulfillmentText": (
+    return build_response(
             "🤔 I didn't understand that.\n"
             "Try: 'black shoes under 100', 'show me jackets', "
             "'compare Ultraboost vs Runfalcon', or type 'help' for options."
         )
-    })
 
 
 if __name__ == "__main__":

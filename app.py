@@ -26,13 +26,14 @@ INTENT_HELP = "help"
 INTENT_GOODBYE = "goodbye"
 INTENT_NEGATIVE = "Negative Intent"
 INTENT_WELCOME = "Default Welcome Intent"
+INTENT_COMPARE = "Compare Products"         # NEW: for product comparison
+INTENT_PRODUCT_DETAIL = "Product Detail"    # NEW: for single product detail view
+INTENT_AVAILABILITY = "Check Availability"  # NEW: check if product/color is available
 
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
 # ===== Stop words: never count these as meaningful product-name tokens =====
-# This prevents "shoes" or "hoodie" in the query from matching unrelated product names
-# word-by-word, and stops pure category words from triggering detect_products_from_text.
 GENERIC_WORDS = {
     "shoes", "shoe", "hoodie", "hoodies", "jacket", "jackets", "shirt", "shirts",
     "shorts", "pants", "clothing", "clothes", "wear", "apparel", "sneakers",
@@ -43,11 +44,6 @@ GENERIC_WORDS = {
 }
 
 # ===== Build a dynamic term index from the CSV at startup =====
-# Scans every product name and description to collect all searchable
-# item-type keywords that actually exist in the dataset.  At query time we
-# use this index instead of a hardcoded list, so ANY item type
-# (tee, pants, slides, bag, tights, socks, backpack …) can be paired.
-
 def build_csv_term_index(dataframe):
     """
     Returns a set of lowercase single-word and two-word phrases that appear
@@ -98,10 +94,6 @@ def extract_query_item_terms(query_text, dataframe):
     Scans the user query against the CSV term index and returns every
     item-type term that (a) appears in the query AND (b) actually matches
     at least one product in name, description, or category.
-
-    This replaces the old hardcoded ["shoes","hoodie","shorts","shirt","jacket"]
-    list so that ANY pairing works — tee + pants, socks + bag, slides + tights,
-    tights + backpack, etc.
     """
     if not query_text:
         return []
@@ -110,12 +102,10 @@ def extract_query_item_terms(query_text, dataframe):
     found_terms = []
 
     for term in CSV_TERM_INDEX:
-        # Term must appear as a whole word/phrase boundary in the query
         pattern = r"\b" + re.escape(term) + r"\b"
         if not re.search(pattern, text):
             continue
 
-        # Confirm the term actually matches something in the dataset
         for col in ["name", "description", "category"]:
             if col not in dataframe.columns:
                 continue
@@ -124,7 +114,6 @@ def extract_query_item_terms(query_text, dataframe):
                 break
 
     # Remove shorter terms that are substrings of longer matched phrases
-    # e.g. if both "tee" and "graphic tee" matched, keep only "graphic tee"
     found_terms.sort(key=len, reverse=True)
     deduped = []
     for term in found_terms:
@@ -138,9 +127,7 @@ def extract_terms_from_query_text(query_text, dataframe):
     """
     CSV-backed fallback search: when Dialogflow passes no useful parameters,
     this function independently searches product names AND descriptions using
-    every meaningful token in the user query, so the backend can surface
-    results even when Dialogflow extracts nothing.
-
+    every meaningful token in the user query.
     Returns a boolean mask over `dataframe` rows that are relevant.
     """
     if not query_text:
@@ -159,7 +146,6 @@ def extract_terms_from_query_text(query_text, dataframe):
     if not tokens:
         return pd.Series(False, index=dataframe.index)
 
-    # A row matches if ANY meaningful query token appears in its name or description
     combined = pd.Series(False, index=dataframe.index)
     for token in tokens:
         for col in ["name", "description"]:
@@ -186,22 +172,325 @@ def detect_products_from_text(query_text, df):
 
     for name in df["name"].dropna().unique():
         name_lower = str(name).lower()
-
-        # Strip generic/stop words so "Advantage Shoes" is not matched just
-        # because the user said "shoes" — only brand/model tokens count.
         words = [w for w in name_lower.split() if w not in GENERIC_WORDS]
 
-        # If all words were generic, skip this product name entirely
         if not words:
             continue
 
-        # Require ALL meaningful keywords to appear in the query
         match_count = sum(1 for w in words if w in text)
 
         if match_count == len(words):
             matched.append(name)
 
     return list(set(matched))
+
+
+# ===== NEW: Multi-segment query parser =====
+def parse_multi_segment_query(query_text):
+    """
+    Detects queries asking for MULTIPLE product types with potentially
+    different colors/prices per segment.
+
+    Handles patterns like:
+      "pink hoodies and burgundy duffel bags under 500"
+      "black shoes and white t-shirts"
+
+    Returns a list of segment dicts:
+      [{"color": "pink", "product": "hoodies", "max_price": None},
+       {"color": "burgundy", "product": "duffel bags", "max_price": 500}]
+
+    Returns [] if no multi-segment pattern is detected.
+    """
+    if not query_text:
+        return []
+
+    text = query_text.lower()
+
+    # Split on conjunctions
+    raw_segments = re.split(r"\band\b", text)
+
+    if len(raw_segments) < 2:
+        return []
+
+    # Build color list dynamically from dataset
+    colors_in_dataset = set()
+    if "color" in df.columns:
+        for c in df["color"].dropna().unique():
+            for word in re.findall(r"[a-z]+", c.lower()):
+                if len(word) >= 3:
+                    colors_in_dataset.add(word)
+
+    segments = []
+    global_price = _extract_global_price(text)
+
+    for seg in raw_segments:
+        seg = seg.strip()
+        color = None
+        product = None
+        max_price = None
+
+        # Extract price from this segment or fall back to global price
+        price_match = re.search(
+            r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|<)\s*\$?(\d+(?:\.\d+)?)"
+            r"|(?:between\s+\$?(\d+(?:\.\d+)?)\s+and\s+\$?(\d+(?:\.\d+)?))"
+            r"|\$?(\d+(?:\.\d+)?)\s*(?:or\s+)?(?:less|below|max)",
+            seg
+        )
+        if price_match:
+            nums = [float(x) for x in price_match.groups() if x is not None]
+            max_price = max(nums) if nums else None
+        elif global_price is not None:
+            max_price = global_price
+
+        # Extract color
+        for color_word in colors_in_dataset:
+            if re.search(r"\b" + re.escape(color_word) + r"\b", seg):
+                color = color_word
+                break
+
+        # Extract product terms
+        item_terms = extract_query_item_terms(seg, df)
+        if item_terms:
+            product = item_terms[0]  # Take longest/most specific match
+
+        if product:
+            segments.append({
+                "color": color,
+                "product": product,
+                "max_price": max_price,
+                "raw": seg
+            })
+
+    return segments if len(segments) >= 2 else []
+
+
+def _extract_global_price(text):
+    """Extract a single trailing max price from text, e.g. 'under 500'."""
+    m = re.search(
+        r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|<)\s*\$?(\d+(?:\.\d+)?)"
+        r"|\$?(\d+(?:\.\d+)?)\s*(?:or\s+)?(?:less|below|max)",
+        text
+    )
+    if m:
+        nums = [float(x) for x in m.groups() if x is not None]
+        return max(nums) if nums else None
+    return None
+
+
+def search_segment(color=None, product=None, max_price=None, preference=None):
+    """
+    Run a focused search for a single color+product+price segment.
+    Returns a sorted DataFrame.
+    """
+    results = df.copy()
+
+    if color and "color" in results.columns:
+        results = results[results["color"].str.contains(re.escape(color), case=False, na=False)]
+
+    if product:
+        product_mask = pd.Series(False, index=results.index)
+        for col in ["name", "category", "description"]:
+            if col in results.columns:
+                product_mask |= results[col].str.contains(re.escape(product), case=False, na=False)
+        results = results[product_mask]
+
+    if max_price is not None and "selling_price" in results.columns:
+        results = results[results["selling_price"].notna()]
+        results = results[results["selling_price"] <= max_price]
+
+    if "original_price" in results.columns:
+        results["discount"] = results["original_price"] - results["selling_price"]
+    else:
+        results["discount"] = 0
+
+    results = results.sort_values(
+        ["average_rating", "reviews_count"], ascending=False
+    ).reset_index(drop=True)
+
+    return results
+
+
+# ===== NEW: Product comparison =====
+def compare_products(query_text):
+    """
+    Detects two product model names in the query and returns a formatted
+    side-by-side comparison including description, price, rating.
+
+    Supports patterns like:
+      "compare ultraboost and runfalcon"
+      "ultraboost vs runfalcon"
+      "difference between nmd and superstar"
+    """
+    text = query_text.lower()
+
+    # Patterns for comparison queries
+    vs_pattern = re.search(r"(.+?)\s+(?:vs\.?|versus)\s+(.+)", text)
+    compare_pattern = re.search(
+        r"(?:compare|comparison between|difference between|compare between)\s+(.+?)\s+(?:and|vs\.?|versus|with)\s+(.+)",
+        text
+    )
+    and_pattern = re.search(r"(.+?)\s+and\s+(.+)", text)
+
+    term_a, term_b = None, None
+
+    if vs_pattern:
+        term_a = vs_pattern.group(1).strip()
+        term_b = vs_pattern.group(2).strip()
+    elif compare_pattern:
+        term_a = compare_pattern.group(1).strip()
+        term_b = compare_pattern.group(2).strip()
+    elif and_pattern:
+        term_a = and_pattern.group(1).strip()
+        term_b = and_pattern.group(2).strip()
+
+    if not term_a or not term_b:
+        return None
+
+    def find_best_match(term):
+        mask = pd.Series(False, index=df.index)
+        for col in ["name", "description"]:
+            if col in df.columns:
+                mask |= df[col].str.contains(re.escape(term), case=False, na=False)
+        matched = df[mask]
+        if matched.empty:
+            return None
+        # Return the best-rated match
+        return matched.sort_values(
+            ["average_rating", "reviews_count"], ascending=False
+        ).iloc[0]
+
+    product_a = find_best_match(term_a)
+    product_b = find_best_match(term_b)
+
+    if product_a is None and product_b is None:
+        return f"❌ Could not find products matching '{term_a}' or '{term_b}'."
+    if product_a is None:
+        return f"❌ Could not find a product matching '{term_a}'."
+    if product_b is None:
+        return f"❌ Could not find a product matching '{term_b}'."
+
+    def safe(val, prefix="", suffix="", decimals=None):
+        if pd.isna(val) or val is None:
+            return "N/A"
+        if decimals is not None:
+            return f"{prefix}{float(val):.{decimals}f}{suffix}"
+        return f"{prefix}{val}{suffix}"
+
+    lines = [
+        f"📊 Comparison: {product_a.get('name', term_a)} vs {product_b.get('name', term_b)}",
+        "",
+        f"{'Attribute':<22} {'Product A':<35} {'Product B':<35}",
+        "-" * 92,
+        f"{'Name':<22} {str(product_a.get('name',''))[:34]:<35} {str(product_b.get('name',''))[:34]:<35}",
+        f"{'Category':<22} {str(product_a.get('category',''))[:34]:<35} {str(product_b.get('category',''))[:34]:<35}",
+        f"{'Color':<22} {str(product_a.get('color',''))[:34]:<35} {str(product_b.get('color',''))[:34]:<35}",
+        f"{'Selling Price':<22} {safe(product_a.get('selling_price'), '$', '', 0):<35} {safe(product_b.get('selling_price'), '$', '', 0):<35}",
+        f"{'Original Price':<22} {safe(product_a.get('original_price'), '$', '', 0):<35} {safe(product_b.get('original_price'), '$', '', 0):<35}",
+        f"{'Rating':<22} {safe(product_a.get('average_rating'), '⭐', '', 1):<35} {safe(product_b.get('average_rating'), '⭐', '', 1):<35}",
+        f"{'Reviews':<22} {safe(product_a.get('reviews_count')):<35} {safe(product_b.get('reviews_count')):<35}",
+        f"{'Availability':<22} {str(product_a.get('availability',''))[:34]:<35} {str(product_b.get('availability',''))[:34]:<35}",
+        "",
+        f"📝 {product_a.get('name', term_a)} Description:",
+        _truncate(str(product_a.get("description", "N/A")), 300),
+        "",
+        f"📝 {product_b.get('name', term_b)} Description:",
+        _truncate(str(product_b.get("description", "N/A")), 300),
+    ]
+
+    return "\n".join(lines)
+
+
+def _truncate(text, max_len=300):
+    """Truncate text to max_len characters, appending '...' if cut."""
+    if not text or text == "nan":
+        return "N/A"
+    return text[:max_len] + ("..." if len(text) > max_len else "")
+
+
+# ===== NEW: Detect comparison intent from free text =====
+def is_comparison_query(query_text):
+    """Returns True if the query looks like a product comparison request."""
+    text = query_text.lower()
+    triggers = [
+        r"\bvs\.?\b", r"\bversus\b", r"\bcompare\b", r"\bcomparison\b",
+        r"\bdifference between\b", r"\bcompare between\b",
+    ]
+    for t in triggers:
+        if re.search(t, text):
+            return True
+    return False
+
+
+# ===== NEW: Product detail / info =====
+def get_product_detail(query_text):
+    """
+    Returns full detail for a single named product found in the query.
+    Used when user asks 'tell me about X' or 'what is X'.
+    """
+    text = query_text.lower()
+    matched = detect_products_from_text(text, df)
+    if not matched:
+        # Broader fallback: any row whose name is contained in query
+        if "name" in df.columns:
+            for name in df["name"].dropna().unique():
+                if str(name).lower() in text:
+                    matched = [name]
+                    break
+
+    if not matched:
+        return None
+
+    target = matched[0]
+    mask = df["name"].str.contains(re.escape(target), case=False, na=False)
+    row = df[mask].sort_values(["average_rating", "reviews_count"], ascending=False).iloc[0]
+
+    def safe(val, prefix="", suffix="", decimals=None):
+        if pd.isna(val):
+            return "N/A"
+        if decimals is not None:
+            return f"{prefix}{float(val):.{decimals}f}{suffix}"
+        return f"{prefix}{val}{suffix}"
+
+    lines = [
+        f"🔍 {row.get('name', target)}",
+        f"Category   : {row.get('category', 'N/A')}",
+        f"Color      : {row.get('color', 'N/A')}",
+        f"Price      : {safe(row.get('selling_price'), '$', '', 0)}",
+        f"Rating     : {safe(row.get('average_rating'), '⭐', '', 1)} ({safe(row.get('reviews_count'))} reviews)",
+        f"Availability: {row.get('availability', 'N/A')}",
+        f"",
+        f"📝 Description:",
+        _truncate(str(row.get("description", "N/A")), 400),
+    ]
+    return "\n".join(lines)
+
+
+# ===== NEW: Suggest similar products =====
+def suggest_similar(product_name, exclude_names=None, top_n=3):
+    """
+    Given a product name, suggests similar products from the same category.
+    Optionally excludes a list of already-shown names.
+    """
+    if "name" not in df.columns or "category" not in df.columns:
+        return []
+
+    mask = df["name"].str.contains(re.escape(product_name), case=False, na=False)
+    if not mask.any():
+        return []
+
+    category = df[mask].iloc[0].get("category", None)
+    if not category or category == "nan":
+        return []
+
+    similar = df[df["category"].str.contains(re.escape(str(category)), case=False, na=False)]
+
+    if exclude_names:
+        for exc in exclude_names:
+            similar = similar[~similar["name"].str.contains(re.escape(exc), case=False, na=False)]
+
+    similar = similar[~mask]  # exclude the product itself
+    similar = similar.sort_values(["average_rating", "reviews_count"], ascending=False)
+    return similar.head(top_n)
 
 
 def get_param(params, *names):
@@ -220,6 +509,8 @@ def parse_price_range(value):
     - 'under 100'
     - '100-200'
     - 'below 150'
+    - 'above 80' / 'over 80'
+    - 'between 50 and 150'
     Returns: (min_price, max_price)
     """
     if value is None:
@@ -237,9 +528,55 @@ def parse_price_range(value):
     if len(numbers) == 1:
         if any(k in text for k in ["under", "below", "less than", "up to", "max", "maximum"]):
             return None, numbers[0]
+        if any(k in text for k in ["above", "over", "more than", "min", "minimum", "at least"]):
+            return numbers[0], None
         return numbers[0], numbers[0]
 
     return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
+
+
+# ===== NEW: Parse price constraints directly from free text =====
+def parse_price_from_text(text):
+    """
+    Extract (min_price, max_price) directly from raw query text.
+    Handles: 'under 100', 'below 50', 'above 80', 'between 50 and 150',
+             'shoes above 80', 'over 200', '50 to 150', 'less than 120'
+    Returns (min_price, max_price) — either may be None.
+    """
+    if not text:
+        return None, None
+
+    t = text.lower().replace(",", "")
+
+    # between X and Y / X to Y
+    m = re.search(r"between\s+\$?(\d+(?:\.\d+)?)\s+and\s+\$?(\d+(?:\.\d+)?)", t)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+
+    m = re.search(r"\$?(\d+(?:\.\d+)?)\s+to\s+\$?(\d+(?:\.\d+)?)", t)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+
+    # under / below / less than / up to / max
+    m = re.search(
+        r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|no\s+more\s+than|<)\s*\$?(\d+(?:\.\d+)?)", t
+    )
+    if m:
+        return None, float(m.group(1))
+
+    # X or less / X or below
+    m = re.search(r"\$?(\d+(?:\.\d+)?)\s+or\s+(?:less|below)", t)
+    if m:
+        return None, float(m.group(1))
+
+    # above / over / more than / at least / min
+    m = re.search(
+        r"(?:above|over|more\s+than|at\s+least|min(?:imum)?|>)\s*\$?(\d+(?:\.\d+)?)", t
+    )
+    if m:
+        return float(m.group(1)), None
+
+    return None, None
 
 
 def format_product(row):
@@ -255,7 +592,11 @@ def format_product(row):
     return f"{name} | {category} | {color} | {price_text} {rating_text}"
 
 
-def search_products(params):
+def search_products(params, query_text=""):
+    """
+    Core search function. Filters df based on Dialogflow params,
+    with additional price parsing from raw query text as fallback.
+    """
     results = df.copy()
 
     brand = get_param(params, "brand")
@@ -268,30 +609,24 @@ def search_products(params):
 
     # ===== FILTERS =====
     if brand and str(brand).lower() != "adidas":
-        return jsonify({
-            "fulfillmentText": "Item not found. We only carry Adidas products."
-        })
+        return pd.DataFrame()  # Return empty df; caller handles the brand message
 
     if color and "color" in results.columns:
         results = results[results["color"].str.contains(str(color), case=False, na=False)]
 
     if products:
         product_mask = pd.Series(False, index=results.index)
-
         for col in ["name", "category", "description"]:
             if col in results.columns:
                 product_mask |= results[col].str.contains(str(products), case=False, na=False)
-
         results = results[product_mask]
-    # ===== STRONG USAGE FILTER (NEW) =====
+
+    # ===== STRONG USAGE FILTER =====
     if usage:
         usage_mask = pd.Series(False, index=results.index)
-
         for col in ["category", "description", "name"]:
             if col in results.columns:
                 usage_mask |= results[col].str.contains(str(usage), case=False, na=False)
-
-        # Only apply if it actually finds something
         if usage_mask.any():
             results = results[usage_mask]
 
@@ -301,8 +636,12 @@ def search_products(params):
     if max_price:
         try:
             max_price_range = float(max_price)
-        except:
+        except Exception:
             pass
+
+    # NEW: Also parse price from raw query text if params gave nothing
+    if min_price is None and max_price_range is None and query_text:
+        min_price, max_price_range = parse_price_from_text(query_text)
 
     if "selling_price" in results.columns:
         results = results[results["selling_price"].notna()]
@@ -314,7 +653,7 @@ def search_products(params):
             results = results[results["selling_price"] <= max_price_range]
 
     # ===== DISCOUNT CALCULATION =====
-    if "original_price" in results.columns:
+    if "original_price" in results.columns and "selling_price" in results.columns:
         results["discount"] = results["original_price"] - results["selling_price"]
     else:
         results["discount"] = 0
@@ -325,27 +664,32 @@ def search_products(params):
 
         if "cheap" in pref:
             results = results.sort_values("selling_price")
-
         elif "expensive" in pref:
             results = results.sort_values("selling_price", ascending=False)
-
         elif "best" in pref or "rating" in pref:
             results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
-
         elif "popular" in pref:
             results = results.sort_values("reviews_count", ascending=False)
-
         elif "discount" in pref or "deal" in pref:
             results = results.sort_values("discount", ascending=False)
-
+        else:
+            results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
     else:
-        # default smart ranking
-        results = results.sort_values(
-            ["average_rating", "reviews_count"],
-            ascending=False
-        )
+        results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
 
     return results.reset_index(drop=True)
+
+
+# ===== NEW: Detect greetings =====
+GREETING_PATTERNS = re.compile(
+    r"^\s*(?:hi|hello|hey|howdy|what'?s\s+up|sup|good\s+(?:morning|afternoon|evening|day))[!.,?]*\s*$",
+    re.IGNORECASE,
+)
+
+DETAIL_PATTERNS = re.compile(
+    r"\b(?:tell\s+me\s+about|what\s+is|what'?s|describe|details?\s+(?:of|about|on)|info(?:rmation)?\s+(?:on|about))\b",
+    re.IGNORECASE,
+)
 
 
 @app.route("/webhook", methods=["POST"])
@@ -356,29 +700,48 @@ def webhook():
     intent_name = query_result.get("intent", {}).get("displayName", "")
     params = query_result.get("parameters", {})
     session_id = req.get("session", "default-session")
+    query_text = query_result.get("queryText", "")
 
-    # Help
-    if intent_name == INTENT_HELP:
+    # ===== GREETING (catch-all for hi/hello even if Dialogflow maps it wrong) =====
+    if GREETING_PATTERNS.match(query_text) or intent_name == INTENT_WELCOME:
         return jsonify({
             "fulfillmentText": (
-                "Try a product search using color, brand, category, or price. "
-                "Examples: 'red sneakers under 120', 'show me jackets', 'nike shoes under 150'."
+                "👋 Hi there! Welcome to the Adidas USA store.\n"
+                "I can help you find shoes, clothing, accessories and more.\n"
+                "Try: 'running shoes under $100', 'best rated hoodies', "
+                "'compare Ultraboost and Runfalcon', or 'show all categories'."
             )
         })
 
-    # Goodbye
-    if intent_name == INTENT_GOODBYE:
+    # ===== HELP =====
+    if intent_name == INTENT_HELP:
         return jsonify({
-            "fulfillmentText": "Bye! Come back anytime if you want to search for more products."
+            "fulfillmentText": (
+                "🆘 Here's what you can ask me:\n"
+                "• 'shoes under 100' — filter by category and price\n"
+                "• 'black running shoes' — filter by color and usage\n"
+                "• 'cheap clothing' / 'best accessories' — sort by preference\n"
+                "• 'shoes between 50 and 150' — price range\n"
+                "• 'compare Ultraboost and Runfalcon' — side-by-side comparison\n"
+                "• 'show all categories' — browse available categories\n"
+                "• 'show more' — see next batch of results\n"
+                "• 'pink hoodies and burgundy duffel bags under 500' — multi-product search"
+            )
         })
 
-    # Negative
+    # ===== GOODBYE =====
+    if intent_name == INTENT_GOODBYE:
+        return jsonify({
+            "fulfillmentText": "👋 Bye! Come back anytime if you want to search for more products."
+        })
+
+    # ===== NEGATIVE =====
     if intent_name == INTENT_NEGATIVE:
         return jsonify({
             "fulfillmentText": "Okay — tell me another color, brand, category, or budget and I'll search again."
         })
 
-    # List categories
+    # ===== LIST CATEGORIES =====
     if intent_name == INTENT_LIST_CATEGORIES:
         if "category" not in df.columns:
             return jsonify({"fulfillmentText": "I cannot find categories in the dataset."})
@@ -400,25 +763,84 @@ def webhook():
             return jsonify({"fulfillmentText": "No categories found in the dataset."})
 
         return jsonify({
-            "fulfillmentText": "Here are some categories I found:\n- " + "\n- ".join(categories)
+            "fulfillmentText": "📂 Here are some categories I found:\n- " + "\n- ".join(categories)
         })
 
-    # Product search
-    if intent_name == INTENT_PRODUCT_SEARCH:
+    # ===== COMPARE PRODUCTS (intent-driven or free-text detection) =====
+    if intent_name == INTENT_COMPARE or is_comparison_query(query_text):
+        result = compare_products(query_text)
+        if result:
+            return jsonify({"fulfillmentText": result})
+        return jsonify({
+            "fulfillmentText": "❌ I couldn't identify two products to compare. Try: 'compare Ultraboost and Runfalcon'."
+        })
 
-        query_text = query_result.get("queryText", "")
+    # ===== PRODUCT DETAIL =====
+    if intent_name == INTENT_PRODUCT_DETAIL or DETAIL_PATTERNS.search(query_text):
+        detail = get_product_detail(query_text)
+        if detail:
+            return jsonify({"fulfillmentText": detail})
+        # Fall through to product search if no specific product found
+
+    # ===== PRODUCT SEARCH =====
+    if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (
+        INTENT_SHOW_MORE, INTENT_LIST_CATEGORIES, INTENT_HELP,
+        INTENT_GOODBYE, INTENT_NEGATIVE, INTENT_WELCOME,
+        INTENT_COMPARE, INTENT_PRODUCT_DETAIL, INTENT_AVAILABILITY,
+    ):
+        # ── MULTI-SEGMENT QUERY (e.g. "pink hoodies and burgundy duffel bags") ──
+        segments = parse_multi_segment_query(query_text)
+
+        if segments:
+            all_lines = []
+            cache_ids = []
+
+            for seg in segments:
+                seg_results = search_segment(
+                    color=seg.get("color"),
+                    product=seg.get("product"),
+                    max_price=seg.get("max_price"),
+                )
+
+                color_label = seg.get("color", "").title() if seg.get("color") else ""
+                product_label = seg.get("product", "").title()
+                header = f"🛍️ {color_label} {product_label}".strip() + ":"
+
+                if seg_results.empty:
+                    all_lines.append(f"{header}\n  ❌ No products found.")
+                else:
+                    top = seg_results.head(PAGE_SIZE)
+                    cache_ids.extend(top.index.tolist())
+                    seg_lines = [f"  - {format_product(row)}" for _, row in top.iterrows()]
+                    all_lines.append(header + "\n" + "\n".join(seg_lines))
+                    if len(seg_results) > PAGE_SIZE:
+                        all_lines[-1] += f"\n  (Say 'show more {product_label.lower()}' for more)"
+
+            SESSION_CACHE[session_id] = {
+                "shown_ids": cache_ids,
+                "last_params": params,
+                "last_query": query_text,
+                "segments": segments,
+            }
+
+            message = "\n\n".join(all_lines)
+            return jsonify({"fulfillmentText": message})
+
+        # ── SINGLE-SEGMENT SEARCH ──
+        brand = get_param(params, "brand")
+        if brand and str(brand).lower() not in ("adidas", ""):
+            return jsonify({
+                "fulfillmentText": "❌ Item not found. We only carry Adidas products."
+            })
 
         matched_products = detect_products_from_text(query_text, df)
+        results = search_products(params, query_text)
 
-        results = search_products(params)
+        # If brand was invalid, search_products returns empty DataFrame
+        if isinstance(results, tuple):
+            return results  # should not happen now but safe guard
 
-        # FIX 2: Always initialise category_mask to all-False BEFORE use.
         category_mask = pd.Series(False, index=results.index)
-
-        # FIX 3: Use the dynamic CSV term index instead of a hardcoded list.
-        # extract_query_item_terms scans the entire dataset vocabulary so any
-        # item type (tee, pants, tights, bag, socks, slides …) can be paired,
-        # not just the 5 terms that were previously hard-coded.
         item_terms = extract_query_item_terms(query_text, df)
 
         if item_terms:
@@ -433,49 +855,53 @@ def webhook():
             if category_mask.any():
                 results = results[category_mask]
             else:
-                # ❌ DO NOT fallback → keep empty
-                results = results.iloc[0:0]
+                results = results.iloc[0:0]  # No fallback: keep empty
 
-        # FIX 4: Always initialise exact_matches to an empty DataFrame so the
-        # reference below is safe even when matched_products is empty.
+        # NEW: If still empty after item_term filtering AND we have a raw query,
+        # try a broader token-level text search as a final fallback ONLY when
+        # no item terms were extracted (avoids wrong-category results).
+        if results.empty and not item_terms and query_text:
+            text_mask = extract_terms_from_query_text(query_text, df)
+            if text_mask.any():
+                results = df[text_mask].sort_values(
+                    ["average_rating", "reviews_count"], ascending=False
+                ).reset_index(drop=True)
+
         exact_matches = pd.DataFrame()
+        name_mask = pd.Series(False, index=results.index)
 
         if matched_products and "name" in results.columns:
-            name_mask = pd.Series(False, index=results.index)
-
             for product_name in matched_products:
-                name_mask |= results["name"].str.contains(product_name, case=False, na=False)
-
+                name_mask |= results["name"].str.contains(
+                    re.escape(product_name), case=False, na=False
+                )
             exact_matches = results[name_mask]
 
         if matched_products and not exact_matches.empty:
-            # Prioritize exact matches but DO NOT discard others
-            results["priority"] = 0
             results.loc[name_mask, "priority"] = 1
-
+            results["priority"] = results.get("priority", pd.Series(0, index=results.index)).fillna(0)
             results = results.sort_values(
-                ["priority", "average_rating", "reviews_count"],
-                ascending=False
+                ["priority", "average_rating", "reviews_count"], ascending=False
             )
 
         if results.empty:
             return jsonify({
-                "fulfillmentText": "No products found. Try a different color, category, brand, or price."
+                "fulfillmentText": (
+                    "😕 No products found matching your request.\n"
+                    "Try a different color, category, brand, or price range.\n"
+                    "Type 'show all categories' to see what's available."
+                )
             })
 
-        # Save results for Show More
         SESSION_CACHE[session_id] = {
             "shown_ids": results.index.tolist()[:PAGE_SIZE],
             "last_params": params,
-            "last_query": query_text
+            "last_query": query_text,
         }
 
         top_rows = results.head(PAGE_SIZE)
         lines = [format_product(row) for _, row in top_rows.iterrows()]
 
-        # FIX 5: Consolidate the header into a single message so there is never a
-        # duplicated emoji prefix (the old code prepended message_prefix and then
-        # built a second "🎯 I found these exact products:" header inside `message`).
         if len(matched_products) > 1:
             message = "🛒 You selected multiple products:\n"
         elif len(matched_products) == 1:
@@ -486,11 +912,11 @@ def webhook():
         message += "\n".join(f"- {line}" for line in lines)
 
         if len(results) > PAGE_SIZE:
-            message += "\nSay 'show more' to see more."
+            message += "\n\nSay 'show more' to see more."
 
         return jsonify({"fulfillmentText": message})
 
-    # Show more (NEW LOGIC: re-search + exclude shown)
+    # ===== SHOW MORE =====
     if intent_name == INTENT_SHOW_MORE:
         cache = SESSION_CACHE.get(session_id)
 
@@ -499,112 +925,129 @@ def webhook():
                 "fulfillmentText": "Please search for a product first."
             })
 
-        query_text = query_result.get("queryText", "")
-        params = query_result.get("parameters", {})
-
         # If user just says "more", reuse previous search
-        if not any(params.values()):
+        if not any(v for v in params.values() if v not in (None, "", [], {})):
             params = cache.get("last_params", {})
             query_text = cache.get("last_query", "")
 
-        # 🔥 Re-run search
-        results = search_products(params)
+        # ── Multi-segment show more ──
+        cached_segments = cache.get("segments")
+        if cached_segments:
+            # Determine which segment user wants more of, or re-show all
+            all_lines = []
+            shown_ids = cache.get("shown_ids", [])
 
-        # ===== COLOR AVAILABILITY CHECK =====
-        products = get_param(params, "products")
-        color = get_param(params, "color")
+            for seg in cached_segments:
+                seg_results = search_segment(
+                    color=seg.get("color"),
+                    product=seg.get("product"),
+                    max_price=seg.get("max_price"),
+                )
 
-        if products:
+                seg_results = seg_results[~seg_results.index.isin(shown_ids)]
+
+                color_label = seg.get("color", "").title() if seg.get("color") else ""
+                product_label = seg.get("product", "").title()
+                header = f"🛍️ More {color_label} {product_label}".strip() + ":"
+
+                if seg_results.empty:
+                    all_lines.append(f"{header}\n  ✅ No more products.")
+                else:
+                    top = seg_results.head(PAGE_SIZE)
+                    shown_ids.extend(top.index.tolist())
+                    seg_lines = [f"  - {format_product(row)}" for _, row in top.iterrows()]
+                    all_lines.append(header + "\n" + "\n".join(seg_lines))
+
+            cache["shown_ids"] = shown_ids
+
+            if all(("No more" in l or "not found" in l.lower()) for l in all_lines):
+                return jsonify({"fulfillmentText": "✅ No more products found for your search."})
+
+            return jsonify({"fulfillmentText": "\n\n".join(all_lines)})
+
+        # ── Single-segment show more ──
+        results = search_products(params, query_text)
+
+        # Color availability check
+        products_param = get_param(params, "products")
+        color_param = get_param(params, "color")
+
+        if products_param:
             product_only = df.copy()
-
             product_mask = pd.Series(False, index=product_only.index)
             for col in ["name", "category", "description"]:
                 if col in product_only.columns:
-                    product_mask |= product_only[col].str.contains(str(products), case=False, na=False)
-
+                    product_mask |= product_only[col].str.contains(
+                        str(products_param), case=False, na=False
+                    )
             product_only = product_only[product_mask]
 
-            if not product_only.empty and color:
+            if not product_only.empty and color_param:
                 color_match = product_only[
-                    product_only["color"].str.contains(str(color), case=False, na=False)
+                    product_only["color"].str.contains(str(color_param), case=False, na=False)
                 ]
-
                 if color_match.empty:
                     available_colors = (
-                        product_only["color"]
-                        .dropna()
-                        .str.lower()
-                        .unique()
-                        .tolist()
+                        product_only["color"].dropna().str.lower().unique().tolist()
                     )
-
                     return jsonify({
-                        "fulfillmentText":
-                            f"Sorry, we do not have {color} {products}. "
+                        "fulfillmentText": (
+                            f"😕 Sorry, we do not have {color_param} {products_param}.\n"
                             f"Available colors: {', '.join(available_colors[:6])}."
+                        )
                     })
 
-        # 🔥 Apply item filtering again (important)
         item_terms = extract_query_item_terms(query_text, df)
-
         if item_terms:
             category_mask = pd.Series(False, index=results.index)
             for term in item_terms:
                 for col in ["category", "name", "description"]:
                     if col in results.columns:
                         category_mask |= results[col].str.contains(
-                            term, case=False, na=False
+                            re.escape(term), case=False, na=False
                         )
             results = results[category_mask]
 
-        # 🔥 Remove already shown items
         shown_ids = cache.get("shown_ids", [])
         results = results[~results.index.isin(shown_ids)]
 
-        # Get next batch
         next_chunk = results.head(PAGE_SIZE)
 
         if next_chunk.empty:
-            return jsonify({
-                "fulfillmentText": "No more products found."
-            })
+            return jsonify({"fulfillmentText": "✅ No more products found."})
 
-        # 🔥 Update cache
         cache["shown_ids"].extend(next_chunk.index.tolist())
 
-        # ===== FORMAT OUTPUT (your original logic, adapted) =====
         lines = []
         for _, item in next_chunk.iterrows():
             price = item.get("selling_price")
-            if price is not None and price == price:
-                price_text = f"${float(price):.0f}"
-            else:
-                price_text = "price not listed"
-
+            price_text = f"${float(price):.0f}" if pd.notna(price) else "price not listed"
             name = item.get("name", "Unknown")
-            brand = item.get("brand", "")
+            brand_val = item.get("brand", "")
             category = item.get("category", "")
-            color = item.get("color", "")
+            color_val = item.get("color", "")
 
             parts = [str(name)]
-            if brand:
-                parts.append(str(brand))
-            if category:
+            if brand_val and brand_val != "nan":
+                parts.append(str(brand_val))
+            if category and category != "nan":
                 parts.append(str(category))
-            if color:
-                parts.append(str(color))
+            if color_val and color_val != "nan":
+                parts.append(str(color_val))
             parts.append(price_text)
 
             lines.append(" | ".join(parts))
 
         message = "More products:\n" + "\n".join(f"- {line}" for line in lines)
-
         return jsonify({"fulfillmentText": message})
 
-
-    # Fallback
+    # ===== FALLBACK =====
     return jsonify({
-        "fulfillmentText": "I did not understand that. Try 'black shoes under 100' or 'show me jackets'."
+        "fulfillmentText": (
+            "🤔 I didn't understand that.\n"
+            "Try: 'black shoes under 100', 'show me jackets', "
+            "'compare Ultraboost vs Runfalcon', or type 'help' for options."
+        )
     })
 
 

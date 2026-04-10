@@ -571,6 +571,91 @@ def is_comparison_query(query_text):
     return False
 
 
+# ===== Infer gender from product row =====
+def infer_gender_from_row(row):
+    """
+    Infers gender label from breadcrumbs, name, category, description.
+    Returns 'Women', 'Men', 'Kids', or 'Unisex'.
+    """
+    text = " ".join([
+        str(row.get("breadcrumbs", "")),
+        str(row.get("name", "")),
+        str(row.get("category", "")),
+        str(row.get("description", "")),
+    ]).lower()
+
+    if re.search(r"\bwomen|\bwomens|\bladies|\bfemale|\bher\b|\bgirl", text):
+        return "Women"
+    if re.search(r"\bmen\b|\bmens\b|\bmale|\bhis\b|\bguy|\bboy\b", text):
+        return "Men"
+    if re.search(r"\bkids|\bjunior|\byouth|\bchild", text):
+        return "Kids"
+    return "Unisex"
+
+
+# ===== Rich product detail card =====
+def build_product_detail_card(row):
+    """
+    Builds a rich, Streamlit-style product detail card from a product row dict.
+    """
+    def _s(val, prefix="", suffix="", decimals=None):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return "N/A"
+        if decimals is not None:
+            return f"{prefix}{float(val):.{decimals}f}{suffix}"
+        return f"{prefix}{val}{suffix}"
+
+    name     = row.get("name", "Unknown")
+    category = _s(row.get("category"))
+    color    = _s(row.get("color"))
+    price    = _s(row.get("selling_price"), "$", "", 0)
+    orig     = _s(row.get("original_price"), "$", "", 0)
+    rating   = _s(row.get("average_rating"), "", "/5", 1)
+    reviews  = _s(row.get("reviews_count"))
+    avail    = str(row.get("availability", "N/A"))
+    gender   = infer_gender_from_row(row)
+    desc     = _truncate(str(row.get("description", "N/A")), 500)
+
+    # Availability badge
+    in_stock = "in stock" in avail.lower() or avail.lower() in ("true", "1", "yes", "available")
+    stock_badge = "✅ In Stock" if in_stock else "❌ Out of Stock"
+
+    # Discount badge
+    try:
+        orig_f = float(row.get("original_price", 0) or 0)
+        sell_f = float(row.get("selling_price", 0) or 0)
+        if orig_f > sell_f > 0:
+            pct = int(round((orig_f - sell_f) / orig_f * 100))
+            discount_line = f"\n🏷️ Discount    : {pct}% off  (was {orig})"
+        else:
+            discount_line = ""
+    except Exception:
+        discount_line = ""
+
+    # Star rendering
+    try:
+        stars = round(float(rating.replace("/5", "")))
+        star_str = "⭐" * stars + "☆" * (5 - stars)
+    except Exception:
+        star_str = ""
+
+    card = (
+        f"🛍️ {name}\n"
+        f"\n"
+        f"{stock_badge}\n"
+        f"\n"
+        f"💰 Price      : {price}{discount_line}\n"
+        f"🏷️ Category   : {category}   🎨 Color: {color}\n"
+        f"👤 Gender     : {gender}\n"
+        f"{star_str} Rating: {rating}\n"
+        f"💬 Reviews    : {reviews}\n"
+        f"\n"
+        f"📝 Description:\n"
+        f"{desc}"
+    )
+    return card
+
+
 # ===== NEW: Product detail / info =====
 def get_product_detail(query_text):
     """
@@ -592,26 +677,7 @@ def get_product_detail(query_text):
     target = matched[0]
     mask = df["name"].str.contains(re.escape(target), case=False, na=False)
     row = df[mask].sort_values(["average_rating", "reviews_count"], ascending=False).iloc[0]
-
-    def safe(val, prefix="", suffix="", decimals=None):
-        if pd.isna(val):
-            return "N/A"
-        if decimals is not None:
-            return f"{prefix}{float(val):.{decimals}f}{suffix}"
-        return f"{prefix}{val}{suffix}"
-
-    lines = [
-        f"🔍 {row.get('name', target)}",
-        f"Category   : {row.get('category', 'N/A')}",
-        f"Color      : {row.get('color', 'N/A')}",
-        f"Price      : {safe(row.get('selling_price'), '$', '', 0)}",
-        f"Rating     : {safe(row.get('average_rating'), '⭐', '', 1)} ({safe(row.get('reviews_count'))} reviews)",
-        f"Availability: {row.get('availability', 'N/A')}",
-        "",
-        "📝 Description:",
-        _truncate(str(row.get("description", "N/A")), 400),
-    ]
-    return "\n".join(lines)
+    return build_product_detail_card(row.to_dict())
 
 
 # ===== NEW: Suggest similar products =====
@@ -739,32 +805,46 @@ def parse_price_from_text(text):
 # ===== NEW: Deduplicate repeated price/color/word tokens in query =====
 def sanitize_query(query_text):
     """
-    Cleans up malformed queries from the bonus 'break' tests:
+    Cleans up malformed queries:
     - 'black black shoes' → 'black shoes'
     - 'shoes under under 100' → 'shoes under 100'
-    - '100 200 shoes' → handled gracefully by parse_price_from_text
     - 'more more more more' → 'show more'
+    - quick-reply chip labels → canonical search terms
+    - '1.', '#2', 'select 3' → '1', '2', '3'
     Returns cleaned string.
     """
     if not query_text:
         return query_text
 
-    text = query_text.strip().lower()
+    text = query_text.strip()
 
-    # Quick-reply chip label translation
+    # Strip emoji and map chip labels (case-insensitive, strip leading emoji)
+    stripped = re.sub(r"[^\w\s]", "", text).strip().lower()
     chip_map = {
-        "👩 women": "women",
-        "👨 men": "men",
-        "🧒 kids": "kids",
-        "👟 shoes": "shoes",
-        "👕 clothing": "clothing",
-        "🎒 accessories": "accessories",
-        "📂 categories": "show all categories",
-        "🔍 search again": "help",
+        "women": "women",
+        "men": "men",
+        "kids": "kids",
+        "shoes": "shoes",
+        "clothing": "clothing",
+        "accessories": "accessories",
+        "categories": "show all categories",
+        "search again": "help",
         "show more": "show more",
+        "back to results": "show more",
+        "categories": "show all categories",
     }
-    if text in chip_map:
-        return chip_map[text]
+    if stripped in chip_map:
+        return chip_map[stripped]
+
+    text = text.lower().strip()
+
+    # Normalise product selection: "1.", "#1", "select 1", "number 1", "option 1" → "1"
+    num_match = re.match(
+        r"^(?:#\s*|select\s+|option\s+|number\s+|item\s+|pick\s+)?([1-9])[\.\s]*$",
+        text
+    )
+    if num_match:
+        return num_match.group(1)
 
     # 'more more more' → treat as 'show more'
     if re.match(r"^(?:more\s+)+$", text):
@@ -824,6 +904,11 @@ def format_product(row, index=None):
     category = row.get("category", "")
     color = row.get("color", "")
 
+    # Infer gender for list display
+    row_dict = row.to_dict() if hasattr(row, "to_dict") else row
+    gender = infer_gender_from_row(row_dict)
+    gender_text = f"👤 {gender}" if gender and gender != "Unisex" else ""
+
     price_text = f"${price:.0f}" if pd.notna(price) else "N/A"
     rating_text = f"⭐ {rating:.1f}" if pd.notna(rating) else ""
     reviews_text = f"({int(reviews)} reviews)" if pd.notna(reviews) and reviews else ""
@@ -836,6 +921,8 @@ def format_product(row, index=None):
         parts.append(f"   {category_text}")
     if color_text:
         parts.append(f"   {color_text}")
+    if gender_text:
+        parts.append(f"   {gender_text}")
     parts.append(f"   💰 {price_text}  {rating_text} {reviews_text}".rstrip())
     return "\n".join(parts)
 
@@ -1237,62 +1324,30 @@ def webhook():
         return build_response(message, quick_replies=chips_more)
 
     # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
-    number_match = re.match(r"^#?\s*([123])\s*$", query_text.strip())
+    number_match = re.match(r"^([1-9])$", query_text.strip())
     if number_match or intent_name == INTENT_SELECT_PRODUCT:
         cache = SESSION_CACHE.get(session_id, {})
         shown_products = cache.get("shown_products", [])
         if not shown_products:
             return build_response(
                 "🔍 No recent results to select from.\n"
-                "Please search for a product first!"
+                "Please search for a product first, then reply with its number.",
+                quick_replies=["👟 Shoes", "👕 Clothing", "🎒 Accessories"]
             )
-        pick_index = int(number_match.group(1)) - 1 if number_match else None
-        if pick_index is None:
-            # Try to parse from params
+        # Resolve index
+        if number_match:
+            pick_index = int(number_match.group(1)) - 1
+        else:
             try:
-                pick_index = int(str(get_param(params, "number", "ordinal") or "0")) - 1
+                raw_num = str(get_param(params, "number", "ordinal") or "1")
+                pick_index = int(re.search(r"\d+", raw_num).group()) - 1
             except Exception:
                 pick_index = 0
-        if pick_index < 0 or pick_index >= len(shown_products):
-            return build_response(
-                f"❓ Please reply with a number between 1 and {len(shown_products)}."
-            )
+        # Clamp to valid range
+        pick_index = max(0, min(pick_index, len(shown_products) - 1))
         row = shown_products[pick_index]
-
-        def _safe(val, prefix="", suffix="", decimals=None):
-            if val is None or (isinstance(val, float) and pd.isna(val)):
-                return "N/A"
-            if decimals is not None:
-                return f"{prefix}{float(val):.{decimals}f}{suffix}"
-            return f"{prefix}{val}{suffix}"
-
-        name      = row.get("name", "Unknown")
-        category  = row.get("category", "N/A")
-        color     = row.get("color", "N/A")
-        price     = _safe(row.get("selling_price"), "$", "", 0)
-        orig      = _safe(row.get("original_price"), "$", "", 0)
-        rating    = _safe(row.get("average_rating"), "⭐ ", "", 1)
-        reviews   = _safe(row.get("reviews_count"))
-        avail     = row.get("availability", "N/A")
-        gender    = row.get("gender", "")
-        desc      = _truncate(str(row.get("description", "N/A")), 400)
-
-        gender_line = f"\n👤 Gender     : {gender}" if gender and gender not in ("nan", "N/A", "") else ""
-
-        detail_text = (
-            f"🔍 {name}\n"
-            f"\n"
-            f"🏷️ Category   : {category}\n"
-            f"🎨 Color      : {color}{gender_line}\n"
-            f"💰 Price      : {price}\n"
-            f"🏷️ Original   : {orig}\n"
-            f"⭐ Rating     : {rating} ({reviews} reviews)\n"
-            f"📦 Available  : {avail}\n"
-            f"\n"
-            f"📝 Description:\n"
-            f"{desc}"
-        )
-        return build_response(detail_text, quick_replies=["🔍 Search Again", "📂 Categories", "Show More"])
+        card = build_product_detail_card(row)
+        return build_response(card, quick_replies=["« Back to results", "Show More", "📂 Categories"])
 
     # ===== PRODUCT SEARCH =====
     if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (

@@ -900,21 +900,41 @@ def webhook():
         }
 
         top_rows = results.head(PAGE_SIZE)
-        lines = [format_product(row) for _, row in top_rows.iterrows()]
+        messages = []
 
+        # Header
         if len(matched_products) > 1:
-            message = "🛒 You selected multiple products:\n"
+            messages.append({"text": {"text": ["🛒 You selected multiple products:"]}})
         elif len(matched_products) == 1:
-            message = "🎯 Product found:\n"
+            messages.append({"text": {"text": ["🎯 Product found:"]}})
         else:
-            message = "🔥 Top picks for you:\n"
+            messages.append({"text": {"text": ["🔥 Top picks for you:"]}})
 
-        message += "\n".join(f"- {line}" for line in lines)
+        # Each product = separate bubble
+        for _, row in top_rows.iterrows():
+            price = row.get("selling_price")
+            rating = row.get("average_rating")
 
+            messages.append({
+                "text": {
+                    "text": [
+                        f"""🛍️ {row.get("name", "Unknown")}
+        Color: {row.get("color", "")}
+        Category: {row.get("category", "")}
+        Price: ${int(price) if pd.notna(price) else 'N/A'} ⭐ {round(rating,1) if pd.notna(rating) else ''}"""
+                    ]
+                }
+            })
+
+        # Show more hint
         if len(results) > PAGE_SIZE:
-            message += "\n\nSay 'show more' to see more."
+            messages.append({
+                "text": {"text": ["👉 Say 'show more' to see more."]}
+            })
 
-        return jsonify({"fulfillmentText": message})
+        return jsonify({
+            "fulfillmentMessages": messages
+        })
 
     # ===== SHOW MORE =====
     if intent_name == INTENT_SHOW_MORE:

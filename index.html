@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Nike AI Assistant</title>
+
+  <!-- Dialogflow Messenger -->
+  <script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
+
+  <!-- Custom Styling -->
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #f5f6f8;
+    }
+
+    /* Chat bubble button */
+    df-messenger {
+      --df-messenger-bot-message: #111;
+      --df-messenger-user-message: #2563eb;
+      --df-messenger-font-color: white;
+      --df-messenger-chat-background: #ffffff;
+      --df-messenger-send-icon: #2563eb;
+      --df-messenger-input-box-color: #f1f5f9;
+      --df-messenger-minimized-chat-close-icon-color: #fff;
+
+      --df-messenger-button-titlebar-color: #111;
+      --df-messenger-button-titlebar-font-color: white;
+
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+    }
+
+    /* Chat window */
+    df-messenger-chat {
+      border-radius: 16px !important;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+
+    /* Title bar */
+    df-messenger-titlebar {
+      background: #111 !important;
+      font-weight: bold;
+    }
+
+    /* Messages */
+    df-messenger-message {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Input */
+    df-messenger-input {
+      border-top: 1px solid #eee;
+    }
+
+    /* Optional header branding */
+    .header {
+      padding: 20px;
+      background: black;
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .hero {
+      padding: 40px;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: 36px;
+      margin-bottom: 10px;
+    }
+
+    .hero p {
+      color: #666;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Fake ecommerce header -->
+  <div class="header">NIKE AI SHOPPING ASSISTANT</div>
+
+  <div class="hero">
+    <h1>Find Your Perfect Fit</h1>
+    <p>Ask our AI assistant for product recommendations</p>
+  </div>
+
+  <!-- Chatbot -->
+  <df-messenger
+    intent="WELCOME"
+    chat-title="Nike Assistant"
+    agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
+    language-code="en"
+  ></df-messenger>
+
+</body>
+</html>

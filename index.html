@@ -1,102 +1,110 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Nike AI Assistant</title>
 
+  <!-- Dialogflow Messenger -->
+  <script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
+
+  <!-- ENTERPRISE UI FIX -->
   <style>
     body {
       margin: 0;
       font-family: 'Inter', 'Segoe UI', sans-serif;
-      background: #f5f6f8;
+      background: #f3f4f6;
     }
 
-    /* Header */
+    /* HEADER (optional but makes it look real) */
     .header {
-      background: black;
+      background: #000;
       color: white;
-      padding: 18px 30px;
-      font-size: 20px;
-      font-weight: bold;
+      padding: 16px 24px;
+      font-size: 18px;
+      font-weight: 600;
       letter-spacing: 1px;
     }
 
-    /* Layout */
-    .container {
-      display: flex;
-      height: calc(100vh - 60px);
+    /* MAIN CHAT STYLING */
+    df-messenger {
+      /* GLOBAL */
+      --df-messenger-font-family: 'Inter', sans-serif;
+      --df-messenger-font-size: 14px;
+      --df-messenger-font-color: #111;
+
+      /* CHAT WINDOW */
+      --df-messenger-chat-background: #f9fafb;
+      --df-messenger-chat-padding: 16px;
+      --df-messenger-chat-border-radius: 18px;
+
+      /* 🔥 MOST IMPORTANT (FIX MESSY UI) */
+      --df-messenger-message-spacing: 18px;
+      --df-messenger-message-stack-spacing: 12px;
+
+      /* BOT MESSAGE */
+      --df-messenger-message-bot-background: #111827;
+      --df-messenger-message-bot-font-color: #ffffff;
+      --df-messenger-message-bot-border-radius: 16px;
+
+      /* USER MESSAGE */
+      --df-messenger-message-user-background: #2563eb;
+      --df-messenger-message-user-font-color: #ffffff;
+      --df-messenger-message-user-border-radius: 16px;
+
+      /* TITLE BAR */
+      --df-messenger-titlebar-background: #000;
+      --df-messenger-titlebar-font-color: #fff;
+      --df-messenger-titlebar-title-align: center;
+      --df-messenger-titlebar-title-font-size: 16px;
+      --df-messenger-titlebar-padding: 12px;
+
+      /* INPUT */
+      --df-messenger-input-background: #ffffff;
+      --df-messenger-input-padding: 12px;
+      --df-messenger-input-border-top: 1px solid #e5e7eb;
+
+      /* SEND BUTTON */
+      --df-messenger-send-icon-color: #2563eb;
+
+      /* CHAT POSITION */
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
     }
 
-    /* Left content (fake store) */
-    .left {
-      flex: 1;
-      padding: 40px;
+    /* CHAT WINDOW SHADOW */
+    df-messenger-chat {
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
     }
 
-    .left h1 {
-      font-size: 36px;
-      margin-bottom: 10px;
-    }
-
-    .left p {
-      color: #555;
-      font-size: 16px;
-    }
-
-    /* Chat container */
-    .chat-wrapper {
-      width: 380px;
-      background: white;
-      border-left: 1px solid #e5e7eb;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* Chat header */
-    .chat-header {
-      padding: 15px;
-      font-weight: bold;
-      border-bottom: 1px solid #eee;
-      background: #111;
-      color: white;
-    }
-
-    /* Iframe */
-    iframe {
-      flex: 1;
-      border: none;
-    }
   </style>
 </head>
 
 <body>
 
-  <div class="header">NIKE AI SHOPPING</div>
+  <!-- OPTIONAL HEADER -->
+  <div class="header">NIKE AI SHOPPING ASSISTANT</div>
 
-  <div class="container">
+  <!-- CHATBOT -->
+  <df-messenger
+    intent="WELCOME"
+    chat-title="Nike Assistant"
+    agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
+    language-code="en">
+  </df-messenger>
 
-    <!-- LEFT SIDE (for realism) -->
-    <div class="left">
-      <h1>Find Your Perfect Fit</h1>
-      <p>Use our AI assistant to discover products based on your needs.</p>
+  <!-- AUTO OPEN CHAT (for demo effect) -->
+  <script>
+    window.addEventListener('dfMessengerLoaded', function () {
+      const messenger = document.querySelector('df-messenger');
+      const shadowRoot = messenger.shadowRoot;
 
-      <p><b>Try asking:</b></p>
-      <ul>
-        <li>black shoes under 200</li>
-        <li>duffel bags</li>
-        <li>cheap hoodies</li>
-      </ul>
-    </div>
-
-    <!-- RIGHT SIDE CHAT -->
-    <div class="chat-wrapper">
-      <div class="chat-header">Nike Assistant</div>
-
-      <iframe
-        src="https://bot.dialogflow.com/063066d9-6e65-4e59-8180-ff4deb4a02bc">
-      </iframe>
-    </div>
-
-  </div>
+      setTimeout(() => {
+        const button = shadowRoot.querySelector('df-messenger-chat-bubble');
+        if (button) button.click();
+      }, 1000);
+    });
+  </script>
 
 </body>
 </html>

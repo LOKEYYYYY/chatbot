@@ -29,6 +29,8 @@ INTENT_WELCOME = "Default Welcome Intent"
 INTENT_COMPARE = "Compare Products"
 INTENT_PRODUCT_DETAIL = "Product Detail"
 INTENT_AVAILABILITY = "Check Availability"
+INTENT_SELECT_PRODUCT = "Select Product"   # user types "1", "2", "3" to pick from list
+INTENT_GENDER_FILTER = "Gender Filter"     # user says "men" / "women" / "kids"
 
 PAGE_SIZE = 3
 SESSION_CACHE = {}
@@ -749,6 +751,21 @@ def sanitize_query(query_text):
 
     text = query_text.strip().lower()
 
+    # Quick-reply chip label translation
+    chip_map = {
+        "👩 women": "women",
+        "👨 men": "men",
+        "🧒 kids": "kids",
+        "👟 shoes": "shoes",
+        "👕 clothing": "clothing",
+        "🎒 accessories": "accessories",
+        "📂 categories": "show all categories",
+        "🔍 search again": "help",
+        "show more": "show more",
+    }
+    if text in chip_map:
+        return chip_map[text]
+
     # 'more more more' → treat as 'show more'
     if re.match(r"^(?:more\s+)+$", text):
         return "show more"
@@ -762,17 +779,65 @@ def sanitize_query(query_text):
     return text
 
 
-def format_product(row):
+# ===== Gender detection =====
+GENDER_KEYWORDS = {
+    "women": ["women", "woman", "female", "ladies", "girl", "girls", "womens", "her"],
+    "men":   ["men", "man", "male", "guys", "guy", "mens", "his", "boys"],
+    "kids":  ["kids", "kid", "children", "child", "junior", "youth", "boys", "girls"],
+}
+
+def detect_gender_from_text(query_text):
+    """
+    Returns 'women', 'men', 'kids', or None based on keywords in the query.
+    """
+    if not query_text:
+        return None
+    text = query_text.lower()
+    for gender, keywords in GENDER_KEYWORDS.items():
+        for kw in keywords:
+            if re.search(r"\b" + re.escape(kw) + r"\b", text):
+                return gender
+    return None
+
+
+def apply_gender_filter(results, gender):
+    """
+    Filters a DataFrame by gender using name, description, breadcrumbs, and category columns.
+    """
+    if not gender or results.empty:
+        return results
+    gender_mask = pd.Series(False, index=results.index)
+    search_cols = ["name", "description", "breadcrumbs", "category"]
+    for col in search_cols:
+        if col in results.columns:
+            gender_mask |= results[col].str.contains(gender, case=False, na=False)
+    filtered = results[gender_mask]
+    # Fall back to full results if gender filter wipes everything
+    return filtered if not filtered.empty else results
+
+
+def format_product(row, index=None):
     name = row.get("name", "Unknown")
     price = row.get("selling_price", None)
     rating = row.get("average_rating", None)
+    reviews = row.get("reviews_count", None)
     category = row.get("category", "")
     color = row.get("color", "")
 
     price_text = f"${price:.0f}" if pd.notna(price) else "N/A"
-    rating_text = f"⭐{rating:.1f}" if pd.notna(rating) else ""
+    rating_text = f"⭐ {rating:.1f}" if pd.notna(rating) else ""
+    reviews_text = f"({int(reviews)} reviews)" if pd.notna(reviews) and reviews else ""
+    color_text = f"🎨 {color}" if color and color != "nan" else ""
+    category_text = f"🏷️ {category}" if category and category != "nan" else ""
 
-    return f"{name} | {category} | {color} | {price_text} {rating_text}"
+    prefix = f"{index}. " if index is not None else ""
+    parts = [f"{prefix}👟 {name}"]
+    if category_text:
+        parts.append(f"   {category_text}")
+    if color_text:
+        parts.append(f"   {color_text}")
+    parts.append(f"   💰 {price_text}  {rating_text} {reviews_text}".rstrip())
+    return "\n".join(parts)
 
 
 def search_products(params, query_text=""):
@@ -901,6 +966,11 @@ def search_products(params, query_text=""):
     else:
         results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
 
+    # ===== GENDER FILTER =====
+    gender = detect_gender_from_text(query_text)
+    if gender:
+        results = apply_gender_filter(results, gender)
+
     return results.reset_index(drop=True)
 
 
@@ -922,17 +992,25 @@ NONSENSE_PATTERNS = re.compile(
 )
 
 
-def build_response(text):
+def build_response(text, quick_replies=None):
     """
     Converts a newline-delimited fulfillmentText string into a proper
     fulfillmentMessages payload so Dialogflow renders each line as a
     separate message bubble (fixes line-spacing in Web Demo and Messenger).
+    Optionally appends quick-reply suggestion chips.
     """
     lines = [line for line in text.split("\n") if line.strip()]
     messages = [{"text": {"text": [line]}} for line in lines]
+    if quick_replies:
+        messages.append({
+            "quickReplies": {
+                "title": "Quick options:",
+                "quickReplies": quick_replies
+            }
+        })
     return jsonify({
         "fulfillmentMessages": messages,
-        "fulfillmentText": text,  # kept as fallback for non-rich integrations
+        "fulfillmentText": text,
     })
 
 
@@ -952,24 +1030,54 @@ def webhook():
     # ===== GREETING =====
     if GREETING_PATTERNS.match(query_text) or intent_name == INTENT_WELCOME:
         return build_response(
-                "👋 Hi there! Welcome to the Adidas USA store.\n"
-                "I can help you find shoes, clothing, accessories and more.\n"
-                "Try: 'running shoes under $100', 'best rated hoodies', "
-                "'compare Ultraboost and Runfalcon', or 'show all categories'."
-            )
+            "👋 Hi! Welcome to the Adidas USA Store.\n"
+            "\n"
+            "🛍️ Here's what I can do for you:\n"
+            "\n"
+            "1️⃣  Browse by gender\n"
+            "   → Type: women shoes  /  men hoodies  /  kids clothing\n"
+            "\n"
+            "2️⃣  Search by category & color\n"
+            "   → Type: black running shoes under $100\n"
+            "\n"
+            "3️⃣  Sort by preference\n"
+            "   → Type: cheapest shoes  /  best rated hoodies\n"
+            "\n"
+            "4️⃣  Compare products\n"
+            "   → Type: compare Ultraboost and Runfalcon\n"
+            "\n"
+            "5️⃣  Get product details\n"
+            "   → After results appear, reply with the number (1, 2 or 3)\n"
+            "\n"
+            "💡 Type 'help' anytime to see this guide again.",
+            quick_replies=["👩 Women", "👨 Men", "👟 Shoes", "👕 Clothing", "🎒 Accessories", "📂 Categories"]
+        )
 
     # ===== HELP =====
     if intent_name == INTENT_HELP:
         return build_response(
-                "🆘 Here's what you can ask me:\n"
-                "• 'shoes under 100' — filter by category and price\n"
-                "• 'black running shoes' — filter by color and usage\n"
-                "• 'cheap clothing' / 'best accessories' — sort by preference\n"
-                "• 'shoes between 50 and 150' — price range\n"
-                "• 'compare Ultraboost and Runfalcon' — side-by-side comparison\n"
-                "• 'show all categories' — browse available categories\n"
-                "• 'show more' — see next batch of results\n"
-                "• 'pink hoodies and burgundy duffel bags under 500' — multi-product search"
+                "🆘 Here's what I can do:\n"
+                "\n"
+                "🔍 Search by category & price\n"
+                "   e.g. shoes under 100\n"
+                "\n"
+                "🎨 Filter by color\n"
+                "   e.g. black running shoes\n"
+                "\n"
+                "⭐ Sort by preference\n"
+                "   e.g. cheap clothing / best accessories\n"
+                "\n"
+                "💰 Price range\n"
+                "   e.g. shoes between 50 and 150\n"
+                "\n"
+                "📊 Compare products\n"
+                "   e.g. compare Ultraboost and Runfalcon\n"
+                "\n"
+                "📂 Browse categories\n"
+                "   Type: show all categories\n"
+                "\n"
+                "➡️ See more results\n"
+                "   Type: show more"
             )
 
     # ===== GOODBYE =====
@@ -1053,12 +1161,14 @@ def webhook():
                 header = f"🛍️ More {color_label} {product_label}".strip() + ":"
 
                 if seg_results.empty:
-                    all_lines.append(f"{header}\n  ✅ No more products.")
+                    all_lines.append(f"{header}\n✅ No more products.")
                 else:
                     top = seg_results.head(PAGE_SIZE)
                     shown_ids.extend(top.index.tolist())
-                    seg_lines = [f"  - {format_product(row)}" for _, row in top.iterrows()]
-                    all_lines.append(header + "\n" + "\n".join(seg_lines))
+                    separator = "─" * 28
+                    seg_lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top.iterrows())]
+                    body = f"\n{separator}\n".join(seg_lines)
+                    all_lines.append(f"{header}\n\n{body}")
 
             cache["shown_ids"] = shown_ids
 
@@ -1117,33 +1227,79 @@ def webhook():
 
         cache["shown_ids"].extend(next_chunk.index.tolist())
 
-        lines = []
-        for _, item in next_chunk.iterrows():
-            price = item.get("selling_price")
-            price_text = f"${float(price):.0f}" if pd.notna(price) else "price not listed"
-            name = item.get("name", "Unknown")
-            brand_val = item.get("brand", "")
-            category = item.get("category", "")
-            color_val = item.get("color", "")
+        shown_products_more = [row.to_dict() for _, row in next_chunk.iterrows()]
+        cache["shown_products"] = shown_products_more
+        lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(next_chunk.iterrows())]
+        separator = "─" * 28
+        body = f"\n{separator}\n".join(lines)
+        message = f"📦 More results:\n\n{body}"
+        chips_more = [f"#{i+1}" for i in range(len(next_chunk))]
+        return build_response(message, quick_replies=chips_more)
 
-            parts = [str(name)]
-            if brand_val and brand_val != "nan":
-                parts.append(str(brand_val))
-            if category and category != "nan":
-                parts.append(str(category))
-            if color_val and color_val != "nan":
-                parts.append(str(color_val))
-            parts.append(price_text)
-            lines.append(" | ".join(parts))
+    # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
+    number_match = re.match(r"^#?\s*([123])\s*$", query_text.strip())
+    if number_match or intent_name == INTENT_SELECT_PRODUCT:
+        cache = SESSION_CACHE.get(session_id, {})
+        shown_products = cache.get("shown_products", [])
+        if not shown_products:
+            return build_response(
+                "🔍 No recent results to select from.\n"
+                "Please search for a product first!"
+            )
+        pick_index = int(number_match.group(1)) - 1 if number_match else None
+        if pick_index is None:
+            # Try to parse from params
+            try:
+                pick_index = int(str(get_param(params, "number", "ordinal") or "0")) - 1
+            except Exception:
+                pick_index = 0
+        if pick_index < 0 or pick_index >= len(shown_products):
+            return build_response(
+                f"❓ Please reply with a number between 1 and {len(shown_products)}."
+            )
+        row = shown_products[pick_index]
 
-        message = "More products:\n" + "\n".join(f"- {line}" for line in lines)
-        return build_response(message)
+        def _safe(val, prefix="", suffix="", decimals=None):
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return "N/A"
+            if decimals is not None:
+                return f"{prefix}{float(val):.{decimals}f}{suffix}"
+            return f"{prefix}{val}{suffix}"
+
+        name      = row.get("name", "Unknown")
+        category  = row.get("category", "N/A")
+        color     = row.get("color", "N/A")
+        price     = _safe(row.get("selling_price"), "$", "", 0)
+        orig      = _safe(row.get("original_price"), "$", "", 0)
+        rating    = _safe(row.get("average_rating"), "⭐ ", "", 1)
+        reviews   = _safe(row.get("reviews_count"))
+        avail     = row.get("availability", "N/A")
+        gender    = row.get("gender", "")
+        desc      = _truncate(str(row.get("description", "N/A")), 400)
+
+        gender_line = f"\n👤 Gender     : {gender}" if gender and gender not in ("nan", "N/A", "") else ""
+
+        detail_text = (
+            f"🔍 {name}\n"
+            f"\n"
+            f"🏷️ Category   : {category}\n"
+            f"🎨 Color      : {color}{gender_line}\n"
+            f"💰 Price      : {price}\n"
+            f"🏷️ Original   : {orig}\n"
+            f"⭐ Rating     : {rating} ({reviews} reviews)\n"
+            f"📦 Available  : {avail}\n"
+            f"\n"
+            f"📝 Description:\n"
+            f"{desc}"
+        )
+        return build_response(detail_text, quick_replies=["🔍 Search Again", "📂 Categories", "Show More"])
 
     # ===== PRODUCT SEARCH =====
     if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (
         INTENT_SHOW_MORE, INTENT_LIST_CATEGORIES, INTENT_HELP,
         INTENT_GOODBYE, INTENT_NEGATIVE, INTENT_WELCOME,
         INTENT_COMPARE, INTENT_PRODUCT_DETAIL, INTENT_AVAILABILITY,
+        INTENT_SELECT_PRODUCT, INTENT_GENDER_FILTER,
     ):
         # ── NONSENSE / impossible color/product check ──
         if NONSENSE_PATTERNS.search(query_text):
@@ -1172,14 +1328,17 @@ def webhook():
                 header = f"🛍️ {color_label} {product_label}".strip() + ":"
 
                 if seg_results.empty:
-                    all_lines.append(f"{header}\n  ❌ No products found.")
+                    all_lines.append(f"{header}\n❌ No products found.")
                 else:
                     top = seg_results.head(PAGE_SIZE)
                     cache_ids.extend(top.index.tolist())
-                    seg_lines = [f"  - {format_product(row)}" for _, row in top.iterrows()]
-                    all_lines.append(header + "\n" + "\n".join(seg_lines))
+                    separator = "─" * 28
+                    seg_lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top.iterrows())]
+                    body = f"\n{separator}\n".join(seg_lines)
+                    entry = f"{header}\n\n{body}"
                     if len(seg_results) > PAGE_SIZE:
-                        all_lines[-1] += f"\n  (Say 'show more' for more)"
+                        entry += f"\n{separator}\n💬 Say 'show more' for more."
+                    all_lines.append(entry)
 
             SESSION_CACHE[session_id] = {
                 "shown_ids": cache_ids,
@@ -1265,28 +1424,73 @@ def webhook():
                     "Type 'show all categories' to see what's available."
                 )
 
+        top_rows = results.head(PAGE_SIZE)
+        shown_products = [row.to_dict() for _, row in top_rows.iterrows()]
+
         SESSION_CACHE[session_id] = {
             "shown_ids": results.index.tolist()[:PAGE_SIZE],
             "last_params": params,
             "last_query": query_text,
+            "shown_products": shown_products,
         }
 
-        top_rows = results.head(PAGE_SIZE)
-        lines = [format_product(row) for _, row in top_rows.iterrows()]
+        lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top_rows.iterrows())]
 
         if len(matched_products) > 1:
-            message = "🛒 You selected multiple products:\n"
+            header = "🛒 Multiple products found:"
         elif len(matched_products) == 1:
-            message = "🎯 Product found:\n"
+            header = "🎯 Here's what I found:"
         else:
-            message = "🔥 Top picks for you:\n"
+            header = "🔥 Top picks for you:"
 
-        message += "\n".join(f"- {line}" for line in lines)
+        separator = "─" * 28
+        body = f"\n{separator}\n".join(lines)
+        message = f"{header}\n\n{body}"
 
         if len(results) > PAGE_SIZE:
-            message += "\n\nSay 'show more' to see more."
+            message += f"\n{separator}\n💬 Say \'show more\' to see more."
 
-        return build_response(message)
+        # Build numbered quick-reply chips so user can tap to get product details
+        num_shown = len(top_rows)
+        chips = [f"#{i+1}" for i in range(num_shown)]
+        if len(results) > PAGE_SIZE:
+            chips.append("Show More")
+
+        return build_response(message, quick_replies=chips)
+
+    # ===== GENDER FILTER INTENT (e.g. "show me women shoes") =====
+    if intent_name == INTENT_GENDER_FILTER:
+        gender = detect_gender_from_text(query_text)
+        if not gender:
+            return build_response(
+                "Please specify: women, men, or kids.",
+                quick_replies=["👩 Women", "👨 Men", "🧒 Kids"]
+            )
+        gender_results = apply_gender_filter(df.copy(), gender)
+        gender_results = gender_results.sort_values(
+            ["average_rating", "reviews_count"], ascending=False
+        ).reset_index(drop=True)
+        if gender_results.empty:
+            return build_response(f"😕 No products found for {gender}.")
+        top_rows = gender_results.head(PAGE_SIZE)
+        shown_products = [row.to_dict() for _, row in top_rows.iterrows()]
+        SESSION_CACHE[session_id] = {
+            "shown_ids": gender_results.index.tolist()[:PAGE_SIZE],
+            "last_params": params,
+            "last_query": query_text,
+            "shown_products": shown_products,
+        }
+        lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top_rows.iterrows())]
+        separator = "─" * 28
+        body = f"\n{separator}\n".join(lines)
+        icon = "👩" if gender == "women" else ("👨" if gender == "men" else "🧒")
+        message = f"{icon} Top {gender.title()} picks:\n\n{body}"
+        if len(gender_results) > PAGE_SIZE:
+            message += f"\n{separator}\n💬 Say \'show more\' to see more."
+        chips = [f"#{i+1}" for i in range(len(top_rows))]
+        if len(gender_results) > PAGE_SIZE:
+            chips.append("Show More")
+        return build_response(message, quick_replies=chips)
 
     # ===== FALLBACK =====
     return build_response(

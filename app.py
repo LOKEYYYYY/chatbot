@@ -429,18 +429,13 @@ def webhook():
                             re.escape(term), case=False, na=False
                         )
 
-
         if item_terms:
             if category_mask.any():
                 results = results[category_mask]
-        else:
-            # ---- CSV-backed fallback ----
-            # Dialogflow extracted nothing AND no item terms were found via the
-            # index — run a broad keyword search over name + description so the
-            # backend can still find relevant products on its own.
-            fallback_mask = extract_terms_from_query_text(query_text, results)
-            if fallback_mask.any():
-                results = results[fallback_mask]
+            else:
+                fallback_mask = extract_terms_from_query_text(query_text, results)
+                if fallback_mask.any():
+                    results = results[fallback_mask]
 
         # FIX 4: Always initialise exact_matches to an empty DataFrame so the
         # reference below is safe even when matched_products is empty.
@@ -471,8 +466,9 @@ def webhook():
 
         # Save results for Show More
         SESSION_CACHE[session_id] = {
-            "results": results.to_dict("records"),
-            "next_index": PAGE_SIZE
+            "shown_ids": results.index.tolist()[:PAGE_SIZE],
+            "last_params": params,
+            "last_query": query_text
         }
 
         top_rows = results.head(PAGE_SIZE)
@@ -495,28 +491,57 @@ def webhook():
 
         return jsonify({"fulfillmentText": message})
 
-    # Show more
+    # Show more (NEW LOGIC: re-search + exclude shown)
     if intent_name == INTENT_SHOW_MORE:
         cache = SESSION_CACHE.get(session_id)
 
-        if not cache or not cache.get("results"):
+        if not cache:
             return jsonify({
-                "fulfillmentText": "I do not have earlier results yet. Try a product search first."
+                "fulfillmentText": "Please search for a product first."
             })
 
-        all_results = cache["results"]
-        start = cache.get("next_index", PAGE_SIZE)
-        chunk = all_results[start:start + PAGE_SIZE]
+        query_text = query_result.get("queryText", "")
+        params = query_result.get("parameters", {})
 
-        if not chunk:
+        # If user just says "more", reuse previous search
+        if not any(params.values()):
+            params = cache.get("last_params", {})
+            query_text = cache.get("last_query", "")
+
+        # 🔥 Re-run search
+        results = search_products(params)
+
+        # 🔥 Apply item filtering again (important)
+        item_terms = extract_query_item_terms(query_text, df)
+
+        if item_terms:
+            category_mask = pd.Series(False, index=results.index)
+            for term in item_terms:
+                for col in ["category", "name", "description"]:
+                    if col in results.columns:
+                        category_mask |= results[col].str.contains(
+                            term, case=False, na=False
+                        )
+            results = results[category_mask]
+
+        # 🔥 Remove already shown items
+        shown_ids = cache.get("shown_ids", [])
+        results = results[~results.index.isin(shown_ids)]
+
+        # Get next batch
+        next_chunk = results.head(PAGE_SIZE)
+
+        if next_chunk.empty:
             return jsonify({
-                "fulfillmentText": "That is all I found from the previous search."
+                "fulfillmentText": "No more products found."
             })
 
-        cache["next_index"] = start + PAGE_SIZE
+        # 🔥 Update cache
+        cache["shown_ids"].extend(next_chunk.index.tolist())
 
+        # ===== FORMAT OUTPUT (your original logic, adapted) =====
         lines = []
-        for item in chunk:
+        for _, item in next_chunk.iterrows():
             price = item.get("selling_price")
             if price is not None and price == price:
                 price_text = f"${float(price):.0f}"
@@ -541,10 +566,8 @@ def webhook():
 
         message = "More products:\n" + "\n".join(f"- {line}" for line in lines)
 
-        if cache["next_index"] < len(all_results):
-            message += "\nSay 'show more' again for more."
-
         return jsonify({"fulfillmentText": message})
+
 
     # Fallback
     return jsonify({

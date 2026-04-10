@@ -10,7 +10,7 @@ df = pd.read_csv("adidas_usa.csv")
 df.columns = df.columns.str.strip().str.lower()
 
 # Make sure these columns are usable
-for col in ["name", "brand", "color", "category", "description", "breadcrumbs", "availability"]:
+for col in ["name", "brand", "color", "category", "description", "breadcrumbs", "availability", "images"]:
     if col in df.columns:
         df[col] = df[col].astype(str)
 
@@ -781,6 +781,19 @@ def _truncate(text, max_len=300):
     return text[:max_len] + ("..." if len(text) > max_len else "")
 
 
+def get_product_image(row):
+    """
+    Extracts the first (main) product image URL from the images column.
+    Images are stored as tilde-separated URLs.
+    Returns None if no image available.
+    """
+    raw = row.get("images", "") if isinstance(row, dict) else str(row)
+    if not raw or raw in ("nan", "None", ""):
+        return None
+    first = raw.split("~")[0].strip()
+    return first if first.startswith("http") else None
+
+
 # ===== NEW: Detect comparison intent from free text =====
 def is_comparison_query(query_text):
     """Returns True if the query looks like a product comparison request."""
@@ -863,6 +876,8 @@ def build_product_detail_card(row):
     except Exception:
         star_str = ""
 
+    image_url = get_product_image(row)
+
     card = (
         f"🛍️ {name}\n"
         f"\n"
@@ -877,7 +892,7 @@ def build_product_detail_card(row):
         f"📝 Description:\n"
         f"{desc}"
     )
-    return card
+    return card, image_url
 
 
 # ===== NEW: Product detail / info =====
@@ -901,7 +916,8 @@ def get_product_detail(query_text):
     target = matched[0]
     mask = df["name"].str.contains(re.escape(target), case=False, na=False)
     row = df[mask].sort_values(["average_rating", "reviews_count"], ascending=False).iloc[0]
-    return build_product_detail_card(row.to_dict())
+    card_text, image_url = build_product_detail_card(row.to_dict())
+    return card_text, image_url
 
 
 # ===== NEW: Suggest similar products =====
@@ -1334,15 +1350,35 @@ NONSENSE_PATTERNS = re.compile(
 )
 
 
-def build_response(text, quick_replies=None):
+def build_response(text, quick_replies=None, cards=None):
     """
-    Converts a newline-delimited fulfillmentText string into a proper
-    fulfillmentMessages payload so Dialogflow renders each line as a
-    separate message bubble (fixes line-spacing in Web Demo and Messenger).
-    Optionally appends quick-reply suggestion chips.
+    Builds a Dialogflow Messenger-compatible fulfillmentMessages response.
+
+    - text: newline-delimited string → each non-empty line becomes a text bubble
+    - quick_replies: list of chip labels shown as tappable buttons
+    - cards: list of dicts with keys: title, subtitle, imageUri, (optional) buttons
+      Each card renders as a rich product card with image in Dialogflow Messenger
     """
+    messages = []
+
+    # Add image cards FIRST so they appear above the text description
+    if cards:
+        for card in cards:
+            card_payload = {
+                "title": card.get("title", ""),
+                "subtitle": card.get("subtitle", ""),
+            }
+            if card.get("imageUri"):
+                card_payload["imageUri"] = card["imageUri"]
+            if card.get("buttons"):
+                card_payload["buttons"] = card["buttons"]
+            messages.append({"card": card_payload})
+
+    # Add text bubbles
     lines = [line for line in text.split("\n") if line.strip()]
-    messages = [{"text": {"text": [line]}} for line in lines]
+    messages += [{"text": {"text": [line]}} for line in lines]
+
+    # Add quick-reply chips last
     if quick_replies:
         messages.append({
             "quickReplies": {
@@ -1350,6 +1386,7 @@ def build_response(text, quick_replies=None):
                 "quickReplies": quick_replies
             }
         })
+
     return jsonify({
         "fulfillmentMessages": messages,
         "fulfillmentText": text,
@@ -1462,9 +1499,12 @@ def webhook():
 
     # ===== PRODUCT DETAIL =====
     if intent_name == INTENT_PRODUCT_DETAIL or DETAIL_PATTERNS.search(query_text):
-        detail = get_product_detail(query_text)
-        if detail:
-            return build_response(detail)
+        detail_result = get_product_detail(query_text)
+        if detail_result:
+            detail_text, detail_img = detail_result
+            rich_card = [{"title": query_text.title(), "imageUri": detail_img}] if detail_img else None
+            return build_response(detail_text, cards=rich_card,
+                                  quick_replies=["« Back to results", "Show More", "📂 Categories"])
         # Fall through to product search if no specific product found
 
     # ===== SHOW MORE (check early for "show more" phrasing redirected by sanitize) =====
@@ -1601,8 +1641,13 @@ def webhook():
         # Clamp to valid range
         pick_index = max(0, min(pick_index, len(shown_products) - 1))
         row = shown_products[pick_index]
-        card = build_product_detail_card(row)
-        return build_response(card, quick_replies=["« Back to results", "Show More", "📂 Categories"])
+        card_text, image_url = build_product_detail_card(row)
+        rich_card = [{
+            "title": row.get("name", "Product"),
+            "subtitle": f"${float(row.get('selling_price', 0) or 0):.0f}  ⭐ {row.get('average_rating', '')}",
+            "imageUri": image_url,
+        }] if image_url else None
+        return build_response(card_text, quick_replies=["« Back to results", "Show More", "📂 Categories"], cards=rich_card)
 
     # ===== PRODUCT SEARCH =====
     if intent_name == INTENT_PRODUCT_SEARCH or intent_name not in (
@@ -1835,8 +1880,14 @@ def webhook():
         shown_products = cache.get("shown_products", [])
         if shown_products:
             pick_index = max(0, min(int(fallback_num.group(1)) - 1, len(shown_products) - 1))
-            card = build_product_detail_card(shown_products[pick_index])
-            return build_response(card, quick_replies=["« Back to results", "Show More", "📂 Categories"])
+            row = shown_products[pick_index]
+            card_text, image_url = build_product_detail_card(row)
+            rich_card = [{
+                "title": row.get("name", "Product"),
+                "subtitle": f"${float(row.get('selling_price', 0) or 0):.0f}  ⭐ {row.get('average_rating', '')}",
+                "imageUri": image_url,
+            }] if image_url else None
+            return build_response(card_text, quick_replies=["« Back to results", "Show More", "📂 Categories"], cards=rich_card)
 
     return build_response(
             "🤔 I didn't understand that.\n"

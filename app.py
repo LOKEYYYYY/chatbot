@@ -838,9 +838,9 @@ def sanitize_query(query_text):
 
     text = text.lower().strip()
 
-    # Normalise product selection: "1.", "#1", "select 1", "number 1", "option 1" → "1"
+    # Normalise product selection: "View 1", "1.", "#1", "select 1" etc. → "1"
     num_match = re.match(
-        r"^(?:#\s*|select\s+|option\s+|number\s+|item\s+|pick\s+)?([1-9])[\.\s]*$",
+        r"^(?:view\s+|#\s*|select\s+|option\s+|number\s+|item\s+|pick\s+)?([1-9])[\.\s]*$",
         text
     )
     if num_match:
@@ -1320,11 +1320,11 @@ def webhook():
         separator = "─" * 28
         body = f"\n{separator}\n".join(lines)
         message = f"📦 More results:\n\n{body}"
-        chips_more = [f"#{i+1}" for i in range(len(next_chunk))]
+        chips_more = [f"View {i+1}" for i in range(len(next_chunk))]
         return build_response(message, quick_replies=chips_more)
 
     # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
-    number_match = re.match(r"^([1-9])$", query_text.strip())
+    number_match = re.match(r"^([1-9])$", query_text.strip())  # sanitize_query already normalised "View N" → "N"
     if number_match or intent_name == INTENT_SELECT_PRODUCT:
         cache = SESSION_CACHE.get(session_id, {})
         shown_products = cache.get("shown_products", [])
@@ -1415,9 +1415,17 @@ def webhook():
         if isinstance(results, pd.DataFrame) and results.empty and brand and str(brand).lower() not in ("adidas", ""):
             return build_response("❌ Item not found. We only carry Adidas products.")
 
+        # ── Strip gender words before item-term filtering ──
+        # Gender filtering already happened inside search_products().
+        # Leaving gender words in the query causes extract_query_item_terms
+        # to match them against product descriptions and wrongly re-filter.
+        all_gender_kws = [kw for kws in GENDER_KEYWORDS.values() for kw in kws]
+        gender_strip_pattern = r"\b(?:" + "|".join(re.escape(g) for g in all_gender_kws) + r")\b"
+        query_for_item_terms = re.sub(gender_strip_pattern, "", query_text, flags=re.IGNORECASE).strip()
+
         # ── Item-term category filtering ──
         category_mask = pd.Series(False, index=results.index)
-        item_terms = extract_query_item_terms(query_text, df)
+        item_terms = extract_query_item_terms(query_for_item_terms, df)
 
         if item_terms:
             for term in item_terms:
@@ -1432,8 +1440,8 @@ def webhook():
                 results = results.iloc[0:0]
 
         # ── Broad fallback ONLY when no item terms extracted ──
-        if results.empty and not item_terms and query_text:
-            text_mask = extract_terms_from_query_text(query_text, df)
+        if results.empty and not item_terms and query_for_item_terms:
+            text_mask = extract_terms_from_query_text(query_for_item_terms, df)
             if text_mask.any():
                 results = df[text_mask].sort_values(
                     ["average_rating", "reviews_count"], ascending=False
@@ -1507,7 +1515,7 @@ def webhook():
 
         # Build numbered quick-reply chips so user can tap to get product details
         num_shown = len(top_rows)
-        chips = [f"#{i+1}" for i in range(num_shown)]
+        chips = [f"View {i+1}" for i in range(num_shown)]
         if len(results) > PAGE_SIZE:
             chips.append("Show More")
 
@@ -1542,16 +1550,35 @@ def webhook():
         message = f"{icon} Top {gender.title()} picks:\n\n{body}"
         if len(gender_results) > PAGE_SIZE:
             message += f"\n{separator}\n💬 Say \'show more\' to see more."
-        chips = [f"#{i+1}" for i in range(len(top_rows))]
+        chips = [f"View {i+1}" for i in range(len(top_rows))]
         if len(gender_results) > PAGE_SIZE:
             chips.append("Show More")
         return build_response(message, quick_replies=chips)
 
     # ===== FALLBACK =====
+    # Last-chance check: if user typed a number (even via Default Fallback),
+    # and there are recent shown_products in session, treat it as product selection.
+    # This catches cases where Dialogflow routes "1", "#1", "2." to fallback
+    # instead of the Select Product intent.
+    fallback_num = re.match(r"^#?\s*([1-9])[.\s]*$", query_text.strip())
+    if fallback_num:
+        cache = SESSION_CACHE.get(session_id, {})
+        shown_products = cache.get("shown_products", [])
+        if shown_products:
+            pick_index = max(0, min(int(fallback_num.group(1)) - 1, len(shown_products) - 1))
+            card = build_product_detail_card(shown_products[pick_index])
+            return build_response(card, quick_replies=["« Back to results", "Show More", "📂 Categories"])
+
     return build_response(
             "🤔 I didn't understand that.\n"
-            "Try: 'black shoes under 100', 'show me jackets', "
-            "'compare Ultraboost vs Runfalcon', or type 'help' for options."
+            "\n"
+            "Try:\n"
+            "• women shoes / men hoodies\n"
+            "• black shoes under $100\n"
+            "• compare Ultraboost vs Runfalcon\n"
+            "• Type a number (1, 2, 3) to view a product\n"
+            "• Type 'help' for the full guide",
+            quick_replies=["👩 Women", "👨 Men", "👟 Shoes", "👕 Clothing", "help"]
         )
 
 

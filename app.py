@@ -410,7 +410,7 @@ def parse_multi_segment_query(query_text):
                 "color": color,
                 "product": product,
                 "max_price": max_price,
-                "raw": seg
+                "raw": seg,
             })
 
     return segments if len(segments) >= 2 else []
@@ -429,9 +429,9 @@ def _extract_global_price(text):
     return None
 
 
-def search_segment(color=None, product=None, max_price=None, preference=None):
+def search_segment(color=None, product=None, max_price=None, preference=None, gender=None):
     """
-    Run a focused search for a single color+product+price segment.
+    Run a focused search for a single color+product+price+gender segment.
     Returns a sorted DataFrame.
     """
     results = df.copy()
@@ -449,6 +449,10 @@ def search_segment(color=None, product=None, max_price=None, preference=None):
     if max_price is not None and "selling_price" in results.columns:
         results = results[results["selling_price"].notna()]
         results = results[results["selling_price"] <= max_price]
+
+    # Apply gender filter per segment
+    if gender:
+        results = apply_gender_filter(results, gender)
 
     if "original_price" in results.columns and "selling_price" in results.columns:
         results["discount"] = results["original_price"] - results["selling_price"]
@@ -1324,7 +1328,7 @@ def webhook():
         return build_response(message, quick_replies=chips_more)
 
     # ===== SELECT PRODUCT BY NUMBER (click / type 1, 2, 3) =====
-    number_match = re.match(r"^([1-9])$", query_text.strip())  # sanitize_query already normalised "View N" → "N"
+    number_match = re.match(r"^(?:view\s+)?([1-9])$", query_text.strip(), re.IGNORECASE)
     if number_match or intent_name == INTENT_SELECT_PRODUCT:
         cache = SESSION_CACHE.get(session_id, {})
         shown_products = cache.get("shown_products", [])
@@ -1370,29 +1374,40 @@ def webhook():
         if segments:
             all_lines = []
             cache_ids = []
+            all_shown_products = []  # flat list: all products shown across segments
+            gender = detect_gender_from_text(query_text)  # shared gender for all segments
 
-            for seg in segments:
+            for seg_idx, seg in enumerate(segments):
                 seg_results = search_segment(
                     color=seg.get("color"),
                     product=seg.get("product"),
                     max_price=seg.get("max_price"),
+                    gender=gender,
                 )
 
                 color_label = seg.get("color", "").title() if seg.get("color") else ""
                 product_label = seg.get("product", "").title()
-                header = f"🛍️ {color_label} {product_label}".strip() + ":"
+                gender_label = f" ({gender.title()})" if gender else ""
+                header = f"🛍️ {color_label} {product_label}{gender_label}".strip() + ":"
 
                 if seg_results.empty:
                     all_lines.append(f"{header}\n❌ No products found.")
                 else:
                     top = seg_results.head(PAGE_SIZE)
                     cache_ids.extend(top.index.tolist())
+                    seg_products = [row.to_dict() for _, row in top.iterrows()]
+                    all_shown_products.extend(seg_products)
                     separator = "─" * 28
-                    seg_lines = [format_product(row, index=i + 1) for i, (_, row) in enumerate(top.iterrows())]
+                    # Number each product globally across segments so View 1/2/3 map correctly
+                    start_idx = len(all_shown_products) - len(seg_products)
+                    seg_lines = [
+                        format_product(row, index=start_idx + i + 1)
+                        for i, (_, row) in enumerate(top.iterrows())
+                    ]
                     body = f"\n{separator}\n".join(seg_lines)
                     entry = f"{header}\n\n{body}"
                     if len(seg_results) > PAGE_SIZE:
-                        entry += f"\n{separator}\n💬 Say 'show more' for more."
+                        entry += f"\n{separator}\n💬 Say \'show more\' for more."
                     all_lines.append(entry)
 
             SESSION_CACHE[session_id] = {
@@ -1400,9 +1415,12 @@ def webhook():
                 "last_params": params,
                 "last_query": query_text,
                 "segments": segments,
+                "shown_products": all_shown_products,
             }
 
-            return build_response("\n\n".join(all_lines))
+            chips = [f"View {i+1}" for i in range(min(len(all_shown_products), 9))]
+            chips.append("Show More")
+            return build_response("\n\n".join(all_lines), quick_replies=chips)
 
         # ── SINGLE-SEGMENT SEARCH ──
         brand = get_param(params, "brand")
@@ -1560,7 +1578,7 @@ def webhook():
     # and there are recent shown_products in session, treat it as product selection.
     # This catches cases where Dialogflow routes "1", "#1", "2." to fallback
     # instead of the Select Product intent.
-    fallback_num = re.match(r"^#?\s*([1-9])[.\s]*$", query_text.strip())
+    fallback_num = re.match(r"^(?:view\s+|#?\s*)?([1-9])[.\s]*$", query_text.strip(), re.IGNORECASE)
     if fallback_num:
         cache = SESSION_CACHE.get(session_id, {})
         shown_products = cache.get("shown_products", [])

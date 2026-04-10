@@ -7,97 +7,86 @@
   <!-- Dialogflow Messenger -->
   <script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
 
-  <!-- Custom Styling -->
-  <style>
-    body {
-      margin: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background: #f5f6f8;
-    }
+<style>
+  df-messenger {
+    --df-messenger-font-family: 'Inter', 'Segoe UI', sans-serif;
 
-    /* Chat bubble button */
-    df-messenger {
-      --df-messenger-bot-message: #111;
-      --df-messenger-user-message: #2563eb;
-      --df-messenger-font-color: white;
-      --df-messenger-chat-background: #ffffff;
-      --df-messenger-send-icon: #2563eb;
-      --df-messenger-input-box-color: #f1f5f9;
-      --df-messenger-minimized-chat-close-icon-color: #fff;
+    /* Chat background */
+    --df-messenger-chat-background: #f8fafc;
 
-      --df-messenger-button-titlebar-color: #111;
-      --df-messenger-button-titlebar-font-color: white;
+    /* Bot message */
+    --df-messenger-bot-message: #111827;
+    --df-messenger-font-color: #ffffff;
 
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-    }
-
-    /* Chat window */
-    df-messenger-chat {
-      border-radius: 16px !important;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-    }
-
-    /* Title bar */
-    df-messenger-titlebar {
-      background: #111 !important;
-      font-weight: bold;
-    }
-
-    /* Messages */
-    df-messenger-message {
-      font-size: 14px;
-      line-height: 1.5;
-    }
+    /* User message */
+    --df-messenger-user-message: #2563eb;
 
     /* Input */
-    df-messenger-input {
-      border-top: 1px solid #eee;
-    }
+    --df-messenger-input-box-color: #ffffff;
+    --df-messenger-send-icon: #2563eb;
 
-    /* Optional header branding */
-    .header {
-      padding: 20px;
-      background: black;
-      color: white;
-      font-size: 20px;
-      font-weight: bold;
-    }
+    /* Header */
+    --df-messenger-button-titlebar-color: #000000;
+    --df-messenger-button-titlebar-font-color: #ffffff;
 
-    .hero {
-      padding: 40px;
-      text-align: center;
-    }
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+  }
 
-    .hero h1 {
-      font-size: 36px;
-      margin-bottom: 10px;
-    }
+  /* Chat container */
+  df-messenger-chat {
+    border-radius: 20px !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    overflow: hidden;
+  }
 
-    .hero p {
-      color: #666;
-    }
-  </style>
-</head>
+  /* Header bar */
+  df-messenger-titlebar {
+    background: #000 !important;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
 
-<body>
+  /* Messages */
+  df-messenger-message {
+    font-size: 14px;
+    line-height: 1.6;
+  }
 
-  <!-- Fake ecommerce header -->
-  <div class="header">NIKE AI SHOPPING ASSISTANT</div>
+  /* Bot bubble */
+  df-messenger-message.bot {
+    border-radius: 16px !important;
+    padding: 12px 16px;
+  }
 
-  <div class="hero">
-    <h1>Find Your Perfect Fit</h1>
-    <p>Ask our AI assistant for product recommendations</p>
-  </div>
+  /* User bubble */
+  df-messenger-message.user {
+    border-radius: 16px !important;
+    padding: 12px 16px;
+  }
 
-  <!-- Chatbot -->
-  <df-messenger
-    intent="WELCOME"
-    chat-title="Nike Assistant"
-    agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
-    language-code="en"
-  ></df-messenger>
+  /* Input area */
+  df-messenger-input {
+    border-top: 1px solid #e5e7eb;
+    padding: 8px;
+  }
+
+  /* Input field */
+  input {
+    border-radius: 12px !important;
+    padding: 10px !important;
+  }
+</style>
+
+<!-- Chatbot -->
+<df-messenger
+  intent="WELCOME"
+  chat-title="Nike AI Assistant"
+  agent-id="063066d9-6e65-4e59-8180-ff4deb4a02bc"
+  language-code="en"
+></df-messenger>
 
 </body>
 </html>

@@ -37,18 +37,154 @@ SESSION_CACHE = {}
 
 # ===== Stop words: never count these as meaningful product-name tokens =====
 GENERIC_WORDS = {
-    "shoes", "shoe", "hoodie", "hoodies", "jacket", "jackets", "shirt", "shirts",
-    "shorts", "pants", "clothing", "clothes", "wear", "apparel", "sneakers",
-    "sneaker", "boots", "boot", "sandals", "sandal", "socks", "sock",
+    # footwear
+    "shoes", "shoe", "sneakers", "sneaker", "boots", "boot", "sandals", "sandal",
+    "slides", "slide", "footwear", "trainers", "trainer", "kicks",
+    # clothing
+    "hoodie", "hoodies", "jacket", "jackets", "shirt", "shirts", "shorts", "pants",
+    "clothing", "clothes", "wear", "apparel", "tee", "tees", "pullover",
+    "sweatshirt", "windbreaker", "windbreakers", "outerwear", "leggings", "tights",
+    "dress", "jersey", "sweater", "top", "outfit",
+    # accessories
+    "socks", "sock", "gloves", "glove", "cap", "caps", "hat", "hats",
+    "beanie", "beanies", "bag", "bags", "backpack", "backpacks",
+    "accessories", "accessory", "gear",
+    # generic query words
     "and", "or", "the", "a", "an", "for", "me", "please", "show", "find",
     "get", "want", "need", "some", "any", "under", "below", "above", "around",
     "with", "in", "on", "at", "of", "to", "my", "i", "like", "give",
 }
 
-# ===== Subcategory keyword map =====
-# Maps user-facing search terms → keywords searched across name/description/breadcrumbs
+# ===== Entity synonym map =====
+# Maps every user-facing synonym → canonical dataset search term.
+# Covers all Dialogflow entity entries so nothing gets missed.
+# Structure: { "user synonym": "canonical_term_to_search" }
+ENTITY_SYNONYM_MAP = {
+    # ── Footwear ──
+    "footwear": "shoes",
+    "shoes": "shoes",
+    "shoe": "shoes",
+    "sneakers": "shoes",
+    "sneaker": "shoes",
+    "trainers": "shoes",
+    "trainer": "shoes",
+    "running shoes": "shoes",
+    "sport shoes": "shoes",
+    "kicks": "shoes",
+    "joggers": "shoes",       # in footwear context
+    "slides": "slides",
+    # ── Hoodie ──
+    "hoodie": "hoodie",
+    "hoodies": "hoodie",
+    "sweatshirt": "hoodie",
+    "sweatshort": "hoodie",
+    "pullover": "hoodie",
+    "zip up hoodie": "hoodie",
+    "zip hoodie": "hoodie",
+    # ── T-shirt ──
+    "t shirt": "t-shirt",
+    "t-shirt": "t-shirt",
+    "tshirt": "t-shirt",
+    "tee": "t-shirt",
+    "tees": "t-shirt",
+    "shirt": "shirt",
+    "shirts": "shirt",
+    "short sleeve shirt": "shirt",
+    "clothes": "clothing",
+    # ── Jacket ──
+    "jacket": "jacket",
+    "jackets": "jacket",
+    "coat": "jacket",
+    "coats": "jacket",
+    "windbreaker": "windbreaker",
+    "windbreakers": "windbreaker",
+    "outerwear": "jacket",
+    "outerwears": "jacket",
+    # ── Pants ──
+    "pants": "pants",
+    "trousers": "pants",
+    "joggers pants": "pants",
+    "track pants": "pants",
+    "sweatpants": "pants",
+    "trouser": "pants",
+    "jogger": "pants",
+    "track pant": "pants",
+    "sweatpant": "pants",
+    # ── Shorts ──
+    "shorts": "shorts",
+    "sport shorts": "shorts",
+    "running shorts": "shorts",
+    # ── Socks ──
+    "socks": "socks",
+    "sock": "socks",
+    "ankle socks": "socks",
+    "sports socks": "socks",
+    "crew socks": "socks",
+    # ── Bag ──
+    "bag": "bag",
+    "bags": "bag",
+    "backpack": "backpack",
+    "backpacks": "backpack",
+    "gym bag": "bag",
+    "gym bags": "bag",
+    "duffel bag": "duffel",
+    "duffel bags": "duffel",
+    "duffle bags": "duffel",
+    "sack": "bag",
+    "sacks": "bag",
+    "gym sacks": "bag",
+    "gym sack": "bag",
+    # ── Cap / Hat ──
+    "cap": "cap",
+    "caps": "cap",
+    "hat": "hat",
+    "hats": "hat",
+    "beanie": "beanie",
+    "beanies": "beanie",
+    "headwear": "cap",
+    "headwears": "cap",
+    # ── Gloves ──
+    "gloves": "gloves",
+    "glove": "gloves",
+    # ── Ball ──
+    "ball": "ball",
+    "balls": "ball",
+    "football": "ball",
+    "soccer ball": "ball",
+    "basketball ball": "ball",
+    # ── Accessories ──
+    "accessories": "accessories",
+    "accessory": "accessories",
+    "gear": "accessories",
+    # ── Activity subcategories ──
+    "running": "running",
+    "run": "running",
+    "jog": "running",
+    "jogging": "running",
+    "training": "training",
+    "gym": "training",
+    "workout": "training",
+    "exercise": "training",
+    "soccer": "soccer",
+    "football boots": "soccer",
+    "cleats": "soccer",
+    "cleat": "soccer",
+    "golf": "golf",
+    "basketball": "basketball",
+    "climbing": "climbing",
+    "cycling": "cycling",
+    "bike": "cycling",
+    "hiking": "hiking",
+    "hike": "hiking",
+    "trail": "hiking",
+    "casual": "casual",
+    "lifestyle": "casual",
+    "everyday": "casual",
+}
+
+# Reverse lookup: canonical → list of synonyms (for subcategory searching)
 SUBCATEGORY_MAP = {
-    "running": ["running", "run", "jog"],
+    "running": ["running", "run", "jog", "jogging"],
     "casual": ["casual", "lifestyle", "originals", "everyday"],
     "training": ["training", "gym", "workout", "exercise"],
     "soccer": ["soccer", "football", "cleat", "cleats"],
@@ -60,6 +196,26 @@ SUBCATEGORY_MAP = {
     "sandals": ["sandal", "slide", "adilette"],
     "hiking": ["hiking", "hike", "trail"],
 }
+
+
+def resolve_entity_synonyms(query_text):
+    """
+    Scans query_text for any synonym in ENTITY_SYNONYM_MAP and returns
+    a list of canonical search terms to filter on.
+    Longest phrase matches take priority over single words.
+    """
+    if not query_text:
+        return []
+    text = query_text.lower().strip()
+    found = {}
+    # Check multi-word phrases first (longest first to avoid partial matches)
+    sorted_synonyms = sorted(ENTITY_SYNONYM_MAP.keys(), key=len, reverse=True)
+    for synonym in sorted_synonyms:
+        pattern = r"\b" + re.escape(synonym) + r"\b"
+        if re.search(pattern, text):
+            canonical = ENTITY_SYNONYM_MAP[synonym]
+            found[canonical] = True
+    return list(found.keys())
 
 # ===== Preference synonyms =====
 # Normalizes messy user preference language into canonical sorts
@@ -290,41 +446,37 @@ def detect_subcategory_from_text(query_text):
 def detect_category_from_text(query_text):
     """
     Returns the most likely top-level category string for a query.
-    E.g. "black shoes" → "Shoes", "red clothing" → "Clothing"
-    Returns None if ambiguous.
+    Uses the full ENTITY_SYNONYM_MAP so every Dialogflow synonym is covered.
+    E.g. "tshirt" → "Clothing", "windbreaker" → "Clothing", "backpack" → "Accessories"
     """
     if not query_text:
         return None
 
     text = query_text.lower()
 
-    shoe_words = [
-        "shoe", "shoes", "sneaker", "sneakers", "boot", "boots",
-        "sandal", "sandals", "slide", "slides", "footwear", "trainer",
-        "trainers", "running", "basketball", "soccer", "golf", "climbing",
-        "cycling", "cleats", "cleat", "kicks",
-    ]
-    clothing_words = [
-        "clothing", "clothes", "shirt", "shirts", "hoodie", "hoodies",
-        "jacket", "jackets", "shorts", "pants", "tee", "jersey", "top",
-        "sweater", "pullover", "dress", "leggings", "tights", "wear",
-        "apparel", "outfit",
-    ]
-    accessory_words = [
-        "accessories", "accessory", "bag", "bags", "duffel", "backpack",
-        "hat", "cap", "socks", "sock", "gloves", "belt", "wallet",
-        "headband", "wristband",
-    ]
+    # Canonical terms that map to each top-level dataset category
+    shoe_canonicals = {
+        "shoes", "slides", "boots", "sandals", "running", "basketball",
+        "soccer", "golf", "climbing", "cycling", "hiking", "casual", "training",
+    }
+    clothing_canonicals = {
+        "hoodie", "shirt", "t-shirt", "jacket", "windbreaker", "pants",
+        "shorts", "clothing", "dress", "leggings", "jersey",
+    }
+    accessory_canonicals = {
+        "accessories", "bag", "backpack", "duffel", "cap", "hat",
+        "beanie", "socks", "gloves", "ball",
+    }
 
     counts = {"Shoes": 0, "Clothing": 0, "Accessories": 0}
-    for w in shoe_words:
-        if re.search(r"\b" + re.escape(w) + r"\b", text):
+
+    resolved = resolve_entity_synonyms(text)
+    for canonical in resolved:
+        if canonical in shoe_canonicals:
             counts["Shoes"] += 1
-    for w in clothing_words:
-        if re.search(r"\b" + re.escape(w) + r"\b", text):
+        elif canonical in clothing_canonicals:
             counts["Clothing"] += 1
-    for w in accessory_words:
-        if re.search(r"\b" + re.escape(w) + r"\b", text):
+        elif canonical in accessory_canonicals:
             counts["Accessories"] += 1
 
     best = max(counts, key=counts.get)
@@ -400,10 +552,14 @@ def parse_multi_segment_query(query_text):
                 color = color_word
                 break
 
-        # Extract product terms
-        item_terms = extract_query_item_terms(seg, df)
-        if item_terms:
-            product = item_terms[0]  # Take longest/most specific match
+        # Extract product terms — try entity synonym map first, then CSV index
+        entity_terms = resolve_entity_synonyms(seg)
+        if entity_terms:
+            product = entity_terms[0]
+        else:
+            item_terms = extract_query_item_terms(seg, df)
+            if item_terms:
+                product = item_terms[0]  # Take longest/most specific match
 
         if product:
             segments.append({
@@ -1035,25 +1191,56 @@ def search_products(params, query_text=""):
 
     # ===== PRODUCT/CATEGORY FILTER =====
     if products:
+        # Dialogflow passed a products entity — resolve its synonyms first
+        products_resolved = ENTITY_SYNONYM_MAP.get(str(products).lower(), str(products))
         product_mask = pd.Series(False, index=results.index)
         for col in ["name", "category", "description"]:
             if col in results.columns:
-                product_mask |= results[col].str.contains(str(products), case=False, na=False)
+                product_mask |= results[col].str.contains(
+                    re.escape(products_resolved), case=False, na=False
+                )
+                # Also search the original value in case canonical differs
+                if products_resolved != str(products):
+                    product_mask |= results[col].str.contains(
+                        re.escape(str(products)), case=False, na=False
+                    )
         results = results[product_mask]
     elif not products and query_text:
-        # Auto-detect top-level category from raw text
-        detected_cat = detect_category_from_text(query_text)
-        if detected_cat and "category" in results.columns:
-            results = results[
-                results["category"].str.contains(detected_cat, case=False, na=False)
-            ]
+        # Resolve ALL entity synonyms from raw text and filter product/category columns
+        entity_terms = resolve_entity_synonyms(query_text)
+        if entity_terms:
+            entity_mask = pd.Series(False, index=results.index)
+            for term in entity_terms:
+                for col in ["name", "category", "description", "breadcrumbs"]:
+                    if col in results.columns:
+                        entity_mask |= results[col].str.contains(
+                            re.escape(term), case=False, na=False
+                        )
+            if entity_mask.any():
+                results = results[entity_mask]
+            else:
+                # Fall back to top-level category detection
+                detected_cat = detect_category_from_text(query_text)
+                if detected_cat and "category" in results.columns:
+                    results = results[
+                        results["category"].str.contains(detected_cat, case=False, na=False)
+                    ]
+        else:
+            detected_cat = detect_category_from_text(query_text)
+            if detected_cat and "category" in results.columns:
+                results = results[
+                    results["category"].str.contains(detected_cat, case=False, na=False)
+                ]
 
     # ===== SUBCATEGORY FILTER (from usage param or raw query) =====
     if usage:
+        usage_resolved = ENTITY_SYNONYM_MAP.get(str(usage).lower(), str(usage))
         usage_mask = pd.Series(False, index=results.index)
         for col in ["category", "description", "name", "breadcrumbs"]:
             if col in results.columns:
-                usage_mask |= results[col].str.contains(str(usage), case=False, na=False)
+                usage_mask |= results[col].str.contains(
+                    re.escape(usage_resolved), case=False, na=False
+                )
         if usage_mask.any():
             results = results[usage_mask]
     elif not usage and query_text:

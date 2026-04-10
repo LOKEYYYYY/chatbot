@@ -267,19 +267,22 @@ def search_products(params):
     price_range = get_param(params, "price_range")
 
     # ===== FILTERS =====
-    if brand and "brand" in results.columns:
-        results = results[results["brand"].str.contains(str(brand), case=False, na=False)]
+    if brand and str(brand).lower() != "adidas":
+        return jsonify({
+            "fulfillmentText": "Item not found. We only carry Adidas products."
+        })
 
     if color and "color" in results.columns:
         results = results[results["color"].str.contains(str(color), case=False, na=False)]
 
-    for term in [products, usage]:
-        if term:
-            mask = pd.Series(False, index=results.index)
-            for col in ["name", "category", "description"]:
-                if col in results.columns:
-                    mask |= results[col].str.contains(str(term), case=False, na=False)
-            results = results[mask]
+    if products:
+        product_mask = pd.Series(False, index=results.index)
+
+        for col in ["name", "category", "description"]:
+            if col in results.columns:
+                product_mask |= results[col].str.contains(str(products), case=False, na=False)
+
+        results = results[product_mask]
     # ===== STRONG USAGE FILTER (NEW) =====
     if usage:
         usage_mask = pd.Series(False, index=results.index)
@@ -426,9 +429,9 @@ def webhook():
                             re.escape(term), case=False, na=False
                         )
 
-        if category_mask.any():
-            # Only apply the item-type filter when no usage param came from Dialogflow
-            if not get_param(params, "usage"):
+
+        if item_terms:
+            if category_mask.any():
                 results = results[category_mask]
         else:
             # ---- CSV-backed fallback ----
@@ -436,7 +439,7 @@ def webhook():
             # index — run a broad keyword search over name + description so the
             # backend can still find relevant products on its own.
             fallback_mask = extract_terms_from_query_text(query_text, results)
-            if fallback_mask.any() and not get_param(params, "usage"):
+            if fallback_mask.any():
                 results = results[fallback_mask]
 
         # FIX 4: Always initialise exact_matches to an empty DataFrame so the

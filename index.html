@@ -202,27 +202,6 @@
       opacity: .6;
     }
 
-    /* ─── STATS BAR ──────────────────────────────────────────────── */
-    .stats {
-      display: flex;
-      gap: 48px;
-    }
-    .stat-item {}
-    .stat-value {
-      font-family: 'Barlow Condensed', sans-serif;
-      font-size: 36px;
-      font-weight: 700;
-      color: var(--white);
-      line-height: 1;
-    }
-    .stat-label {
-      font-size: 11px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
     /* ─── FLOATING CHAT BUBBLE OVERRIDE ─────────────────────────── */
     df-messenger {
       /* GLOBAL */
@@ -396,8 +375,6 @@
       .header { padding: 0 20px; }
       .header-nav { display: none; }
       .hero { padding: 48px 20px 40px; }
-      .stats { gap: 28px; flex-wrap: wrap; }
-      .features { grid-template-columns: 1fr; }
       .footer { padding: 16px 20px; }
       df-messenger {
         --df-messenger-chat-window-width: calc(100vw - 24px);
@@ -465,21 +442,6 @@
           <span class="chip-dot"></span> Accessories under $30
         </div>
       </div>
-
-      <!-- Stats -->
-      <div class="stats reveal" style="transition-delay:.4s">
-        <div class="stat-item">
-          <div class="stat-value">300+</div>
-          <div class="stat-label">Products</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value">3</div>
-          <div class="stat-label">Categories</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value">AI</div>
-          <div class="stat-label">Powered Search</div>
-        </div>
       </div>
     </section>
 

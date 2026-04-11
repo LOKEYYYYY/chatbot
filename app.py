@@ -1161,9 +1161,20 @@ def search_products(params, query_text=""):
                         break
 
     # ===== PRODUCT/CATEGORY FILTER =====
+    # Canonical product-type terms — these are HARD product filters, not subcategories.
+    # When one of these is detected, subcategory filter must NOT override results.
+    PRODUCT_TYPE_CANONICALS = {
+        "shoes", "hoodie", "shirt", "t-shirt", "jacket", "windbreaker", "pants",
+        "shorts", "clothing", "socks", "bag", "backpack", "duffel", "cap", "hat",
+        "beanie", "gloves", "ball", "accessories", "slides", "boots", "sandals",
+    }
+
+    detected_product_type = None  # track if a hard product type was found
+
     if products:
         products_str = str(products).lower().strip()
         products_resolved = ENTITY_SYNONYM_MAP.get(products_str, products_str)
+        detected_product_type = products_resolved
         product_mask = pd.Series(False, index=results.index)
         for search_term in {products_resolved, products_str}:
             for col in ["name", "category", "description"]:
@@ -1174,18 +1185,47 @@ def search_products(params, query_text=""):
     elif query_text:
         entity_terms = resolve_entity_synonyms(query_text)
         if entity_terms:
-            combined_mask = pd.Series(False, index=results.index)
-            for term in entity_terms:
-                candidate = strict_entity_filter(results, term)
-                combined_mask |= pd.Series(results.index.isin(candidate.index), index=results.index)
-            if combined_mask.any():
-                results = results[combined_mask]
+            # Separate product-type terms from subcategory/activity terms
+            product_type_terms = [t for t in entity_terms if t in PRODUCT_TYPE_CANONICALS]
+            activity_terms = [t for t in entity_terms if t not in PRODUCT_TYPE_CANONICALS]
+
+            if product_type_terms:
+                # Apply product-type filter first — this is the primary filter
+                detected_product_type = product_type_terms[0]
+                combined_mask = pd.Series(False, index=results.index)
+                for term in product_type_terms:
+                    candidate = strict_entity_filter(results, term)
+                    combined_mask |= pd.Series(results.index.isin(candidate.index), index=results.index)
+                if combined_mask.any():
+                    results = results[combined_mask]
+                # Apply activity terms as secondary refinement ONLY if result set stays non-empty
+                if activity_terms:
+                    activity_mask = pd.Series(False, index=results.index)
+                    for term in activity_terms:
+                        for col in ["name", "category", "description", "breadcrumbs"]:
+                            if col in results.columns:
+                                activity_mask |= results[col].str.contains(re.escape(term), case=False, na=False)
+                    if activity_mask.any():
+                        refined = results[activity_mask]
+                        if not refined.empty:
+                            results = refined
+            else:
+                # No product type — apply activity/subcategory terms
+                combined_mask = pd.Series(False, index=results.index)
+                for term in activity_terms:
+                    candidate = strict_entity_filter(results, term)
+                    combined_mask |= pd.Series(results.index.isin(candidate.index), index=results.index)
+                if combined_mask.any():
+                    results = results[combined_mask]
         else:
             detected_cat = detect_category_from_text(query_text)
             if detected_cat and "category" in results.columns:
                 results = results[results["category"].str.contains(detected_cat, case=False, na=False)]
 
     # ===== SUBCATEGORY FILTER =====
+    # Only apply subcategory filter if NO hard product type was already detected.
+    # This prevents "casual shoes" from filtering to hoodies because "casual" matches
+    # clothing items in the subcategory search.
     if usage:
         usage_str = str(usage).lower().strip()
         usage_resolved = ENTITY_SYNONYM_MAP.get(usage_str, usage_str)
@@ -1196,7 +1236,8 @@ def search_products(params, query_text=""):
                     usage_mask |= results[col].str.contains(re.escape(search_term), case=False, na=False)
         if usage_mask.any():
             results = results[usage_mask]
-    elif query_text:
+    elif query_text and detected_product_type is None:
+        # Only run subcategory filter when no product type has been pinned
         subcat_keywords = detect_subcategory_from_text(query_text)
         if subcat_keywords:
             subcat_mask = pd.Series(False, index=results.index)

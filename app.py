@@ -29,23 +29,21 @@ INTENT_WELCOME = "Default Welcome Intent"
 INTENT_COMPARE = "Compare Products"
 INTENT_PRODUCT_DETAIL = "Product Detail"
 INTENT_AVAILABILITY = "Check Availability"
-INTENT_SELECT_PRODUCT = "Select Product"   # user types "1", "2", "3" to pick from list
-INTENT_GENDER_FILTER = "Gender Filter"     # user says "men" / "women" / "kids"
+INTENT_SELECT_PRODUCT = "Select Product"
+INTENT_GENDER_FILTER = "Gender Filter"
 
 PAGE_SIZE = 3
 SESSION_CACHE = {}
 
 # ===== Wishlist stored per session (in-memory) =====
-# Structure: { session_id: [ {product row dict}, ... ] }
 WISHLIST_CACHE = {}
 
-# ── Patterns for "back to results" ──
+# ── Patterns ──
 BACK_TO_RESULTS_PATTERN = re.compile(
     r"(?:back\s+to\s+results?|go\s+back|previous\s+results?|back)",
     re.IGNORECASE,
 )
 
-# ── Patterns for wishlist actions ──
 WISHLIST_ADD_PATTERN = re.compile(
     r"\b(?:save\s+(?:this|it)|add\s+to\s+(?:wishlist|favorites?|saved)|wishlist|favourite|bookmark\s+this)\b",
     re.IGNORECASE,
@@ -59,35 +57,27 @@ WISHLIST_CLEAR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# ── Pattern for "surprise me" ──
 SURPRISE_PATTERN = re.compile(
     r"\b(?:surprise\s+me|random\s+pick|pick\s+(?:something|one)\s+for\s+me|recommend\s+(?:something|one)|just\s+pick\s+one)\b",
     re.IGNORECASE,
 )
 
-# ===== Stop words: never count these as meaningful product-name tokens =====
 GENERIC_WORDS = {
-    # footwear
     "shoes", "shoe", "sneakers", "sneaker", "boots", "boot", "sandals", "sandal",
     "slides", "slide", "footwear", "trainers", "trainer", "kicks",
-    # clothing
     "hoodie", "hoodies", "jacket", "jackets", "shirt", "shirts", "shorts", "pants",
     "clothing", "clothes", "wear", "apparel", "tee", "tees", "pullover",
     "sweatshirt", "windbreaker", "windbreakers", "outerwear", "leggings", "tights",
     "dress", "jersey", "sweater", "top", "outfit",
-    # accessories
     "socks", "sock", "gloves", "glove", "cap", "caps", "hat", "hats",
     "beanie", "beanies", "bag", "bags", "backpack", "backpacks",
     "accessories", "accessory", "gear",
-    # generic query words
     "and", "or", "the", "a", "an", "for", "me", "please", "show", "find",
     "get", "want", "need", "some", "any", "under", "below", "above", "around",
     "with", "in", "on", "at", "of", "to", "my", "i", "like", "give",
 }
 
-# ===== Entity synonym map =====
 ENTITY_SYNONYM_MAP = {
-    # ── Footwear ──
     "footwear": "shoes",
     "shoes": "shoes",
     "shoe": "shoes",
@@ -100,7 +90,6 @@ ENTITY_SYNONYM_MAP = {
     "kicks": "shoes",
     "joggers": "shoes",
     "slides": "slides",
-    # ── Hoodie ──
     "hoodie": "hoodie",
     "hoodies": "hoodie",
     "sweatshirt": "hoodie",
@@ -108,7 +97,6 @@ ENTITY_SYNONYM_MAP = {
     "pullover": "hoodie",
     "zip up hoodie": "hoodie",
     "zip hoodie": "hoodie",
-    # ── T-shirt ──
     "t shirt": "t-shirt",
     "t-shirt": "t-shirt",
     "tshirt": "t-shirt",
@@ -118,7 +106,6 @@ ENTITY_SYNONYM_MAP = {
     "shirts": "shirt",
     "short sleeve shirt": "shirt",
     "clothes": "clothing",
-    # ── Jacket ──
     "jacket": "jacket",
     "jackets": "jacket",
     "coat": "jacket",
@@ -127,7 +114,6 @@ ENTITY_SYNONYM_MAP = {
     "windbreakers": "windbreaker",
     "outerwear": "jacket",
     "outerwears": "jacket",
-    # ── Pants ──
     "pants": "pants",
     "trousers": "pants",
     "joggers pants": "pants",
@@ -137,17 +123,14 @@ ENTITY_SYNONYM_MAP = {
     "jogger": "pants",
     "track pant": "pants",
     "sweatpant": "pants",
-    # ── Shorts ──
     "shorts": "shorts",
     "sport shorts": "shorts",
     "running shorts": "shorts",
-    # ── Socks ──
     "socks": "socks",
     "sock": "socks",
     "ankle socks": "socks",
     "sports socks": "socks",
     "crew socks": "socks",
-    # ── Bag ──
     "bag": "bag",
     "bags": "bag",
     "backpack": "backpack",
@@ -161,7 +144,6 @@ ENTITY_SYNONYM_MAP = {
     "sacks": "bag",
     "gym sacks": "bag",
     "gym sack": "bag",
-    # ── Cap / Hat ──
     "cap": "cap",
     "caps": "cap",
     "hat": "hat",
@@ -170,20 +152,16 @@ ENTITY_SYNONYM_MAP = {
     "beanies": "beanie",
     "headwear": "cap",
     "headwears": "cap",
-    # ── Gloves ──
     "gloves": "gloves",
     "glove": "gloves",
-    # ── Ball ──
     "ball": "ball",
     "balls": "ball",
     "football": "ball",
     "soccer ball": "ball",
     "basketball ball": "ball",
-    # ── Accessories ──
     "accessories": "accessories",
     "accessory": "accessories",
     "gear": "accessories",
-    # ── Activity subcategories ──
     "running": "running",
     "run": "running",
     "jog": "running",
@@ -209,7 +187,6 @@ ENTITY_SYNONYM_MAP = {
     "everyday": "casual",
 }
 
-# Reverse lookup: canonical → list of synonyms (for subcategory searching)
 SUBCATEGORY_MAP = {
     "running": ["running", "run", "jog", "jogging"],
     "casual": ["casual", "lifestyle", "originals", "everyday"],
@@ -226,11 +203,6 @@ SUBCATEGORY_MAP = {
 
 
 def resolve_entity_synonyms(query_text):
-    """
-    Scans query_text for any synonym in ENTITY_SYNONYM_MAP and returns
-    a list of canonical search terms to filter on.
-    Longest phrase matches take priority over single words.
-    """
     if not query_text:
         return []
     text = query_text.lower().strip()
@@ -244,7 +216,6 @@ def resolve_entity_synonyms(query_text):
     return list(found.keys())
 
 
-# ===== Preference synonyms =====
 PREFERENCE_SYNONYMS = {
     "cheap": ["cheap", "cheapest", "affordable", "budget", "inexpensive",
               "low price", "low-price", "low cost", "not expensive",
@@ -460,16 +431,7 @@ def detect_category_from_text(query_text):
     return best
 
 
-# ===== FIX 2: Multi-segment query parser — guard against price-range "and" splitting =====
 def parse_multi_segment_query(query_text):
-    """
-    Detects queries asking for MULTIPLE product types with potentially
-    different colors/prices per segment.
-
-    FIX: Price range patterns like "between 50 and 120" or "50 and 120"
-    are now stripped before splitting on 'and', preventing false multi-segment
-    detection for single queries like "cheap white casual shoes between 50 and 120".
-    """
     if not query_text:
         return []
 
@@ -478,14 +440,11 @@ def parse_multi_segment_query(query_text):
     if is_comparison_query(text):
         return []
 
-    # FIX 2: Strip price range expressions containing "and" BEFORE splitting.
-    # "between 50 and 120" / "$50 and $120" would otherwise split into two fake segments.
     price_and_stripped = re.sub(
         r"between\s+\$?\d+(?:\.\d+)?\s+and\s+\$?\d+(?:\.\d+)?",
         "",
         text
     )
-    # Also strip bare "X and Y" where both X and Y are numbers (e.g. "50 and 120")
     price_and_stripped = re.sub(
         r"\$?\d+(?:\.\d+)?\s+and\s+\$?\d+(?:\.\d+)?",
         "",
@@ -552,7 +511,6 @@ def parse_multi_segment_query(query_text):
 
 
 def _extract_global_price(text):
-    """Extract a single trailing max price from text, e.g. 'under 500'."""
     m = re.search(
         r"(?:under|below|less\s+than|up\s+to|max(?:imum)?|<)\s*\$?(\d+(?:\.\d+)?)"
         r"|\$?(\d+(?:\.\d+)?)\s*(?:or\s+)?(?:less|below|max)",
@@ -949,11 +907,54 @@ def parse_price_from_text(text):
     return None, None
 
 
+# FIX 1: Expanded typo map — apply BEFORE entity synonym resolution
+# so downstream search functions receive corrected text.
+TYPO_MAP = {
+    r"\bshos\b": "shoes",
+    r"\bsheos\b": "shoes",
+    r"\bshose\b": "shoes",
+    r"\bshes\b": "shoes",
+    r"\bshoees\b": "shoes",
+    r"\bsho\b": "shoes",
+    r"\bshoe\b": "shoe",
+    r"\bsnaekers\b": "sneakers",
+    r"\bsnekaers\b": "sneakers",
+    r"\bsnkrs\b": "sneakers",
+    r"\bhoodi\b": "hoodie",
+    r"\bhooide\b": "hoodie",
+    r"\bhoodei\b": "hoodie",
+    r"\bjackt\b": "jacket",
+    r"\bjakcet\b": "jacket",
+    r"\bhikng\b": "hiking",
+    r"\bhikig\b": "hiking",
+    r"\bhikking\b": "hiking",
+    r"\bhiking\b": "hiking",
+    r"\brunng\b": "running",
+    r"\brnning\b": "running",
+    r"\btraning\b": "training",
+    r"\btrainig\b": "training",
+    r"\bbackpak\b": "backpack",
+    r"\bclothng\b": "clothing",
+    r"\bcloting\b": "clothing",
+    r"\bcasul\b": "casual",
+    r"\bcasaul\b": "casual",
+    r"\bsandels\b": "sandals",
+    r"\bsandles\b": "sandals",
+    r"\bpnats\b": "pants",
+    r"\bshirts\b": "shirts",
+}
+
+
+def apply_typo_correction(text):
+    """Apply typo corrections to raw query text."""
+    if not text:
+        return text
+    for pattern, replacement in TYPO_MAP.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def sanitize_query(query_text):
-    """
-    Cleans up malformed queries.
-    FIX 4: Added more robust typo correction patterns.
-    """
     if not query_text:
         return query_text
 
@@ -994,61 +995,8 @@ def sanitize_query(query_text):
     text = re.sub(r"\b(\w+)(\s+\1)+\b", r"\1", text)
     text = re.sub(r"\b(under|below|above|over|between)\s+\1\b", r"\1", text)
 
-    # ── Typo correction ──
-    TYPO_MAP = {
-        # shoes — FIX 4: added common "shos" at word end variants
-        r"\bshos\b": "shoes",
-        r"\bsheos\b": "shoes",
-        r"\bshose\b": "shoes",
-        r"\bshes\b": "shoes",
-        r"\bshoees\b": "shoes",
-        r"\bsnaekers\b": "sneakers",
-        r"\bsnekaers\b": "sneakers",
-        r"\bsneaker\b": "sneaker",
-        # hoodie
-        r"\bhoodi\b": "hoodie",
-        r"\bhooide\b": "hoodie",
-        r"\bhoodie\b": "hoodie",
-        r"\bhoodei\b": "hoodie",
-        # jacket
-        r"\bjackt\b": "jacket",
-        r"\bjakcet\b": "jacket",
-        r"\bjacket\b": "jacket",
-        # hiking
-        r"\bhiking\b": "hiking",
-        r"\bhikng\b": "hiking",
-        r"\bhikig\b": "hiking",
-        r"\bhikking\b": "hiking",
-        # running
-        r"\brunning\b": "running",
-        r"\brunng\b": "running",
-        r"\brnning\b": "running",
-        # training
-        r"\btraning\b": "training",
-        r"\btrainig\b": "training",
-        # backpack
-        r"\bbackpak\b": "backpack",
-        r"\bbackpack\b": "backpack",
-        # clothing
-        r"\bclothing\b": "clothing",
-        r"\bclothng\b": "clothing",
-        r"\bcloting\b": "clothing",
-        # casual
-        r"\bcasual\b": "casual",
-        r"\bcasul\b": "casual",
-        r"\bcasaul\b": "casual",
-        # sandals
-        r"\bsandels\b": "sandals",
-        r"\bsandal\b": "sandal",
-        # pants
-        r"\bpants\b": "pants",
-        r"\bpant\b": "pant",
-        # shorts
-        r"\bshorts\b": "shorts",
-        r"\bshort\b": "short",
-    }
-    for pattern, replacement in TYPO_MAP.items():
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    # FIX 1: Apply typo correction as part of sanitize
+    text = apply_typo_correction(text)
 
     return text
 
@@ -1056,7 +1004,7 @@ def sanitize_query(query_text):
 # ===== Gender detection =====
 GENDER_KEYWORDS = {
     "women": ["women", "woman", "female", "ladies", "girl", "girls", "womens", "her"],
-    "men":   ["men", "man", "male", "guys", "guy", "mens", "his", "boys"],
+    "men":   ["men", "man", "male", "guys", "guy", "mens", "his"],
     "kids":  ["kids", "kid", "children", "child", "junior", "youth", "boys", "girls"],
 }
 
@@ -1064,10 +1012,17 @@ def detect_gender_from_text(query_text):
     if not query_text:
         return None
     text = query_text.lower()
-    for gender, keywords in GENDER_KEYWORDS.items():
-        for kw in keywords:
-            if re.search(r"\b" + re.escape(kw) + r"\b", text):
-                return gender
+    # Check kids first (higher specificity)
+    for kw in GENDER_KEYWORDS["kids"]:
+        if re.search(r"\b" + re.escape(kw) + r"\b", text):
+            return "kids"
+    # Check women before men to avoid "men" matching inside "women"
+    for kw in GENDER_KEYWORDS["women"]:
+        if re.search(r"\b" + re.escape(kw) + r"\b", text):
+            return "women"
+    for kw in GENDER_KEYWORDS["men"]:
+        if re.search(r"\b" + re.escape(kw) + r"\b", text):
+            return "men"
     return None
 
 
@@ -1077,18 +1032,24 @@ def apply_gender_filter(results, gender):
 
     gender_mask = pd.Series(False, index=results.index)
 
-    if "breadcrumbs" in results.columns:
-        gender_mask |= results["breadcrumbs"].str.contains(gender, case=False, na=False)
+    if gender == "women":
+        search_terms = [r"women", r"womens", r"ladies", r"female"]
+    elif gender == "men":
+        search_terms = [r"\bmen\b", r"\bmens\b", r"\bmale\b"]
+    elif gender == "kids":
+        search_terms = [r"kids", r"junior", r"youth", r"child"]
+    else:
+        search_terms = [re.escape(gender)]
 
-    if "name" in results.columns:
-        gender_mask |= results["name"].str.contains(
-            r"\b" + re.escape(gender) + r"\b", case=False, na=False, regex=True
-        )
+    for col in ["breadcrumbs", "name", "category", "description"]:
+        if col not in results.columns:
+            continue
+        for term in search_terms:
+            gender_mask |= results[col].str.contains(term, case=False, na=False, regex=True)
 
-    if not gender_mask.any() and "description" in results.columns:
-        gender_mask |= results["description"].str.contains(gender, case=False, na=False)
-
-    return results[gender_mask]
+    filtered = results[gender_mask]
+    # If filter returns empty, return original (better to show something than nothing)
+    return filtered if not filtered.empty else results
 
 
 def strict_entity_filter(results, term):
@@ -1161,21 +1122,9 @@ def format_product(row, index=None):
     return "\n".join(parts)
 
 
-# ===== FIX 1 & 3: search_products — preserve gender across all filter stages =====
+# FIX 2 & 3: search_products — correct multi-filter logic so price range,
+# color, and preference all apply together without overriding each other.
 def search_products(params, query_text=""):
-    """
-    Core search function.
-
-    FIX 1: "affordable white hoodie under 100"
-      - "affordable" now reliably resolves to preference=cheap via detect_preference_from_text.
-      - "hoodie" now uses strict_entity_filter which checks name+category first, then falls
-        back to description so hoodies in name/category are always found.
-
-    FIX 3: Pagination gender bleed
-      - gender is detected ONCE at the top and stored as `detected_gender`.
-      - The final gender filter block now uses this stored value so it is always applied,
-        even after subcategory and item-term refinement steps that previously clobbered results.
-    """
     results = df.copy()
 
     brand = get_param(params, "brand")
@@ -1186,8 +1135,7 @@ def search_products(params, query_text=""):
     max_price = get_param(params, "max_price")
     price_range = get_param(params, "price_range")
 
-    # FIX 3: Detect gender ONCE at the very top so every subsequent filter
-    # block can reference it, and the final gender-filter block always fires.
+    # Detect gender ONCE at the top
     detected_gender = detect_gender_from_text(query_text)
 
     # ===== BRAND FILTER =====
@@ -1260,6 +1208,7 @@ def search_products(params, query_text=""):
                 results = results[subcat_mask]
 
     # ===== PRICE FILTER =====
+    # FIX 3: Parse price from BOTH params and query_text, then use whichever is set.
     min_price, max_price_range = parse_price_range(price_range)
 
     if max_price:
@@ -1268,8 +1217,16 @@ def search_products(params, query_text=""):
         except Exception:
             pass
 
-    if min_price is None and max_price_range is None and query_text:
+    # Always also parse from query text — text takes precedence if params empty
+    if min_price is None and max_price_range is None:
         min_price, max_price_range = parse_price_from_text(query_text)
+    else:
+        # Even if params gave a max, check if text has a range (e.g. "between X and Y")
+        text_min, text_max = parse_price_from_text(query_text)
+        if text_min is not None and min_price is None:
+            min_price = text_min
+        if text_max is not None and max_price_range is None:
+            max_price_range = text_max
 
     if "selling_price" in results.columns:
         results = results[results["selling_price"].notna()]
@@ -1310,11 +1267,6 @@ def search_products(params, query_text=""):
         results = results.sort_values(["average_rating", "reviews_count"], ascending=False)
 
     # ===== GENDER FILTER =====
-    # FIX 3: Use detected_gender (set at top of function) so this always
-    # applies regardless of what refinements ran above. Previously, a second
-    # call to detect_gender_from_text() here could return None if the query
-    # was already cleaned/rewritten by the show-more path, letting gender-neutral
-    # products slip through on pagination.
     if detected_gender:
         gender_filtered = apply_gender_filter(results, detected_gender)
         if not gender_filtered.empty:
@@ -1323,7 +1275,6 @@ def search_products(params, query_text=""):
     return results.reset_index(drop=True)
 
 
-# ===== Detect greetings =====
 GREETING_PATTERNS = re.compile(
     r"^\s*(?:hi|hello|hey|howdy|what'?s\s+up|sup|good\s+(?:morning|afternoon|evening|day))[!.,?]*\s*$",
     re.IGNORECASE,
@@ -1668,10 +1619,9 @@ def webhook():
             return build_response(multi_more_msg)
 
         # ── Single-segment show more ──
-        # FIX 3: Pass the ORIGINAL cached query (with gender keywords intact)
-        # so search_products can re-detect gender and apply the filter on each
-        # pagination call. Previously query_text_for_more might be blank or
-        # gender-stripped, letting ungendered products through.
+        # FIX 4: Run full search to get complete filtered+sorted result set,
+        # then skip already-shown IDs. This means pagination respects ALL
+        # original filters (color, price, gender, preference) on every page.
         results = search_products(params, query_text_for_more)
 
         products_param = get_param(params, "products")
@@ -1721,13 +1671,16 @@ def webhook():
                 results = results[category_mask]
 
         shown_ids = cache.get("shown_ids", [])
-        results = results[~results.index.isin(shown_ids)]
-        next_chunk = results.head(PAGE_SIZE)
+        remaining = results[~results.index.isin(shown_ids)]
+        next_chunk = remaining.head(PAGE_SIZE)
 
         if next_chunk.empty:
             return build_response("✅ No more products found. Try a new search!")
 
-        cache["shown_ids"].extend(next_chunk.index.tolist())
+        # FIX 4: Extend shown_ids with new chunk, preserve full result count for has_more
+        cache["shown_ids"] = shown_ids + next_chunk.index.tolist()
+
+        has_more_after = len(remaining) > PAGE_SIZE
 
         shown_products_more = [row.to_dict() for _, row in next_chunk.iterrows()]
         cache["shown_products"] = shown_products_more
@@ -1735,7 +1688,11 @@ def webhook():
         separator = "─" * 28
         body = f"\n{separator}\n".join(lines)
         message = f"📦 More results:\n\n{body}"
+        if has_more_after:
+            message += f"\n{separator}\n💬 Say 'show more' to see more."
         chips_more = [f"View {i+1}" for i in range(len(next_chunk))]
+        if has_more_after:
+            chips_more.append("Show More")
         cache["last_result_message"] = message
         cache["last_result_chips"] = chips_more
         cache["last_result_header"] = "📦 More results:"
@@ -1982,6 +1939,9 @@ def webhook():
             "last_result_message": message,
             "last_result_chips": chips,
             "last_result_header": header,
+            # FIX 4: Store FULL result set size so pagination knows total available
+            "total_results": len(results),
+            "all_result_ids": results.index.tolist(),
         }
 
         return build_response(message, quick_replies=chips)
@@ -2016,6 +1976,8 @@ def webhook():
             "last_result_message": gender_message,
             "last_result_chips": gender_chips,
             "last_result_header": gender_header,
+            "total_results": len(gender_results),
+            "all_result_ids": gender_results.index.tolist(),
         }
         return build_response(gender_message, quick_replies=gender_chips)
 
